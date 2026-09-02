@@ -1,0 +1,28 @@
+# 换声工作台(hub) + 功能A/C/D 封装层依赖（Python 3.12 环境，即 runtime\py312）
+#
+# 安装顺序（详见 DEPLOY.md）：
+#   1) 先装 CUDA 版 torch/torchaudio：
+#      runtime\py312\Scripts\python.exe -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+#   2) 再装本文件
+#
+# 版本注意：
+#   - onnxruntime 必须 ==1.17.1（CUDA 11.8 版）：1.18+ 需要 CUDA 12 dll，
+#     本工程只有 cu118，会导致 onnx 回退 CPU、SoVITS 首次加载 80 秒+（像卡死）。
+#   - nvidia-cudnn-cu11 提供 cudnn64_8.dll；sovits_cn_api.py 启动时自动注入其目录到 PATH。
+#   - torch/torchaudio 版本以 DEPLOY.md 与各引擎官方 README 为准（不要在无卡机器装 cu118）。
+#   - 各开源引擎自身依赖（RVC / GPT-SoVITS / so-vits-svc）按各自仓库 README 安装，不在此列。
+
+fastapi
+uvicorn
+python-multipart
+requests
+numpy
+librosa
+soundfile
+scikit-learn
+speechbrain
+parselmouth
+pymss
+funasr
+onnxruntime-gpu==1.17.1
+nvidia-cudnn-cu11

@@ -1,0 +1,18 @@
+# 功能B（OpenVoice 任意人声克隆）封装层依赖（Python 3.10 环境，即 runtime\py310）
+#
+# 安装顺序（详见 DEPLOY.md）：
+#   1) 先按 OpenVoice 官方 README 安装 torch 2.1.2+cu118：
+#      runtime\py310\Scripts\python.exe -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+#   2) 安装 OpenVoice 引擎包（本封装 import openvoice 包）：
+#      runtime\py310\Scripts\python.exe -m pip install -e <OpenVoice源码克隆目录>
+#   3) 再装本文件（封装层自身依赖）
+#
+# 水印库 wavmark 首次使用需联网下载模型；离线时 openvoice_clone_api.py 自动降级为无水印。
+
+fastapi
+uvicorn
+python-multipart
+requests
+numpy
+librosa
+soundfile

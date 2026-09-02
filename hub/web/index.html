@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>换声工作台</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:"Microsoft YaHei",system-ui,sans-serif;margin:0;background:#f5f6f8;color:#222}
+.wrap{max-width:1080px;margin:0 auto;padding:20px 16px 60px}
+header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+header h1{margin:0;font-size:24px}
+header .sub{color:#777;font-size:13px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+.chip{background:#fff;border:1px solid #ddd;border-radius:20px;padding:5px 12px;font-size:13px}
+.chip .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.on{background:#e6f4ea}.on .dot{background:#34a853}
+.off{background:#fdecea}.off .dot{background:#ea4335}
+.card{background:#fff;border:1px solid #e3e5e8;border-radius:10px;padding:16px 18px;margin-bottom:18px}
+.card h2{margin:0 0 10px;font-size:17px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+input[type=text]{flex:1;min-width:240px;padding:8px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px}
+input[type=file]{width:100%;padding:6px 0}
+select{padding:7px 8px;border:1px solid #ccc;border-radius:6px;font-size:14px;max-width:100%}
+button{background:#2e86de;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:14px;cursor:pointer}
+button:disabled{background:#aab}
+button.ghost{background:#fff;color:#2e86de;border:1px solid #2e86de}
+button.green{background:#34a853}
+label.opt{font-size:13px;color:#444;display:flex;align-items:center;gap:5px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border-bottom:1px solid #eee;padding:7px 8px;text-align:left;vertical-align:middle}
+th{background:#fafafa;color:#555}
+audio{width:220px;height:32px}
+.msg{font-size:13px;margin-top:8px;min-height:18px}
+.err{color:#c0392b}.ok{color:#1e8e3e}
+pre{background:#1e1e1e;color:#d8d8d8;padding:10px 12px;border-radius:8px;font-size:12px;
+    min-height:60px;max-height:280px;overflow:auto;white-space:pre-wrap}
+.tip{background:#fff7e6;border:1px solid #f0d48a;border-radius:8px;padding:8px 12px;font-size:12.5px;color:#6b5310;margin-top:10px}
+.speaker-cell{display:flex;flex-direction:column;gap:4px}
+a{color:#2e86de}
+.file-tag{font-size:11px;color:#888}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>🎙 换声工作台</h1>
+  <span class="sub">单文件换声 · 文件夹批量说话人换声 · 视频换声</span>
+</header>
+
+<div class="chips" id="chips">正在检测服务状态…</div>
+
+<!-- ============ 批量换声 ============ -->
+<div class="card">
+  <h2>① 文件夹批量换声</h2>
+  <div class="row">
+    <input type="text" id="dirpath" placeholder="输入素材文件夹路径，例如 D:\素材\对话视频">
+    <button id="btnScan" onclick="scanDir()">扫描文件夹</button>
+    <button class="ghost" id="btnAnalyze" onclick="analyzeAll()" disabled>分析说话人</button>
+    <button class="green" id="btnBatch" onclick="startBatch()" disabled>开始处理</button>
+    <label class="opt"><input type="checkbox" id="optSeparate" checked> 人声分离（视频/带背景音乐素材，推荐勾选）</label>
+  </div>
+  <div class="msg" id="scanMsg"></div>
+  <div id="fileList" style="display:none">
+    <table>
+      <thead><tr><th style="width:34%">文件</th><th>时长</th><th>说话人</th><th>角色分配</th><th>试听</th></tr></thead>
+      <tbody id="fileRows"></tbody>
+    </table>
+    <div class="tip">💡 <b>说话人分析结果</b>：检测到几个说话人就会给几个角色下拉框。2 个声音的对话 → 给两个不同角色，
+    处理时会按说话人自动分段替换；背景音乐/伴奏会自动保留（勾选了人声分离时）。视频输出为 mp4（画面不变），音频输出为 wav。</div>
+  </div>
+</div>
+
+<!-- ============ 批量进度 ============ -->
+<div class="card" id="batchCard" style="display:none">
+  <h2>批量处理进度</h2>
+  <div class="msg" id="batchMsg"></div>
+  <pre id="taskLog">还没有任务</pre>
+  <div id="batchResults"></div>
+</div>
+
+<!-- ============ 单文件换声 ============ -->
+<div class="card">
+  <h2>② 单文件换声</h2>
+  <div class="row">
+    <input type="file" id="oneFile" accept="audio/*,video/*">
+  </div>
+  <div class="row">
+    <span style="font-size:13px;color:#555">换成角色：</span>
+    <select id="oneRole"></select>
+    <label class="opt"><input type="checkbox" id="oneSeparate" checked> 人声分离</label>
+    <button onclick="convertOne()">开始转换</button>
+  </div>
+  <div class="msg" id="oneMsg"></div>
+  <div id="oneResult" style="display:none">
+    <audio id="onePlayer" controls style="width:60%"></audio>
+    <div id="oneLinks" style="margin-top:6px"></div>
+  </div>
+</div>
+
+<!-- ============ 输出文件 ============ -->
+<div class="card">
+  <h2>③ 最近输出（ziliao\输出）</h2>
+  <div class="msg" id="outMsg"></div>
+  <div id="outputs"></div>
+</div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let roles = [], curFiles = [], analysis = {};
+
+function statusChips(svc){
+  const names = {A:'RVC 角色', B:'OpenVoice', C:'SoVITS 中配', D:'GPT-SoVITS'};
+  $('chips').innerHTML = ['A','B','C','D'].map(k => {
+    const s = svc[k];
+    return '<span class="chip ' + (s.online ? 'on' : 'off') + '"><span class="dot"></span>' +
+           names[k] + ' · ' + s.port + (s.online ? ' 在线' : ' 离线') + '</span>';
+  }).join('');
+}
+
+function fillRoles(){
+  const sel = $('oneRole');
+  sel.innerHTML = '<option value="">请选择角色</option>' + roles.map(r =>
+    '<option value="' + r.id + '">' + r.name + '（' + r.engine_cn + '）' + (r.online ? '' : ' ·离线') + '</option>'
+  ).join('');
+}
+
+function spkSelect(label, fileIdx){
+  const d = analysis[fileIdx];
+  if (!d || !d.n_speakers) return '<span class="file-tag">无人声/未分析</span>';
+  const html = [];
+  for (let i = 0; i < d.n_speakers; i++){
+    html.push('<span class="speaker-cell">说话人' + (i+1) + ': ' +
+      '<select data-file="' + fileIdx + '" data-label="' + i + '" class="roleSel">' +
+      '<option value="">（不换）</option>' +
+      roles.map(r => '<option value="' + r.id + '">' + r.name + '（' + r.engine_cn + '）</option>').join('') +
+      '</select></span>');
+  }
+  return html.join('');
+}
+
+function renderFiles(){
+  const tb = $('fileRows');
+  tb.innerHTML = curFiles.map((f, i) => {
+    const a = analysis[i];
+    const info = a ? (a.error ? '<span class="err">✘ ' + a.error + '</span>'
+                    : (a.n_speakers ? '<b>' + a.n_speakers + '</b> 人' : '<span class="file-tag">无人声</span>'))
+                    : '<span class="file-tag">未分析</span>';
+    const prev = a && a.preview ? '<audio controls preload="none" src="/api/preview/' + a.preview + '"></audio>' : '';
+    return '<tr><td>' + f.name + (f.is_video ? ' <span class="file-tag">🎬视频</span>' : '') + '</td>' +
+           '<td>' + f.dur + 's</td>' +
+           '<td>' + info + '</td>' +
+           '<td>' + spkSelect(i, i) + '</td>' +
+           '<td>' + prev + '</td></tr>';
+  }).join('');
+  $('fileList').style.display = 'block';
+}
+
+async function scanDir(){
+  const dir = $('dirpath').value.trim();
+  if (!dir){ $('scanMsg').textContent = '请先填文件夹路径'; return; }
+  $('btnScan').disabled = true;
+  $('scanMsg').className = 'msg'; $('scanMsg').textContent = '扫描中…';
+  try{
+    const r = await fetch('/api/scan', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({dir})});
+    const j = await r.json();
+    if (!r.ok){ $('scanMsg').className = 'msg err'; $('scanMsg').textContent = j.detail; return; }
+    curFiles = j.files; analysis = {};
+    $('scanMsg').className = 'msg ok';
+    $('scanMsg').textContent = '共 ' + curFiles.length + ' 个文件。' +
+      (curFiles.length ? '点「分析说话人」检测每个文件有几个人声。' : '');
+    $('btnAnalyze').disabled = curFiles.length === 0;
+    $('btnBatch').disabled = true;
+    renderFiles();
+  }catch(e){ $('scanMsg').className='msg err'; $('scanMsg').textContent='请求失败：'+e; }
+  finally{ $('btnScan').disabled = false; }
+}
+
+async function analyzeAll(){
+  if (!curFiles.length) return;
+  $('btnAnalyze').disabled = true;
+  $('scanMsg').className = 'msg';
+  startWait($('scanMsg'), '分析说话人中…');
+  try{
+    const r = await fetch('/api/analyze', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({files: curFiles.map(f => ({path: f.path}))})});
+    const j = await r.json();
+    j.results.forEach((a, i) => analysis[i] = a);
+    renderFiles();
+    const errs = j.results.filter(a => a.error).length;
+    $('scanMsg').className = 'msg ' + (errs ? 'err' : 'ok');
+    $('scanMsg').textContent = '分析完成：' + j.results.length + ' 个文件'
+      + (errs ? '，' + errs + ' 个失败' : '') + '。请为每个说话人选择角色，然后点「开始处理」。';
+    $('btnBatch').disabled = j.results.length === 0;
+  }catch(e){ $('scanMsg').className='msg err'; $('scanMsg').textContent='分析失败：'+e; }
+  finally{ $('btnAnalyze').disabled = false; stopWait(); }
+}
+
+function collectMapping(){
+  const items = [];
+  curFiles.forEach((f, i) => {
+    const speakers = {};
+    document.querySelectorAll('.roleSel[data-file="' + i + '"]').forEach(sel => {
+      if (sel.value) speakers[sel.dataset.label] = sel.value;
+    });
+    items.push({path: f.path, speakers});
+  });
+  return items;
+}
+
+async function startBatch(){
+  const dir = $('dirpath').value.trim();
+  const items = collectMapping().filter(it => Object.keys(it.speakers).length > 0);
+  if (!items.length){ $('scanMsg').className='msg err'; $('scanMsg').textContent='请至少给一个说话人分配角色'; return; }
+  $('btnBatch').disabled = true;
+  $('batchCard').style.display = 'block';
+  $('batchResults').innerHTML = '';
+  const r = await fetch('/api/batch', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({dir, files: items, opts: {separate: $('optSeparate').checked}})});
+  const j = await r.json();
+  if (!r.ok){ $('batchMsg').className='msg err'; $('batchMsg').textContent = j.detail; $('btnBatch').disabled=false; return; }
+  $('batchMsg').className = 'msg ok'; $('batchMsg').textContent = j.message;
+  pollTask();
+}
+
+let taskStart = 0;
+async function pollTask(){
+  const r = await fetch('/api/task'); const j = await r.json();
+  $('taskLog').textContent = (j.log || []).join('\n') || '还没有任务';
+  const done = j.total ? (j.done + '/' + j.total) : '';
+  if (j.running){
+    if (!taskStart) taskStart = Date.now();
+    const s = Math.round((Date.now() - taskStart) / 1000);
+    $('batchMsg').textContent = '处理中 ' + done + '：' + (j.step || '') +
+      '（已等待 ' + s + ' 秒；首次加载模型约 1~2 分钟，请勿关闭页面）';
+    setTimeout(pollTask, 2000);
+  } else {
+    taskStart = 0;
+    if (j.ok){
+      $('batchMsg').className = 'msg ok';
+      $('batchMsg').textContent = '✔ 全部完成（' + j.results.length + ' 个输出）';
+    } else {
+      $('batchMsg').className = 'msg err';
+      $('batchMsg').textContent = j.error || '任务结束';
+    }
+    renderResults(j.results);
+    loadOutputs();
+    $('btnBatch').disabled = false;
+  }
+}
+
+function renderResults(results){
+  if (!results || !results.length){ $('batchResults').innerHTML = ''; return; }
+  let h = '<table><tr><th>输出文件</th><th>时长</th><th>试听/播放</th><th>下载</th></tr>';
+  results.forEach(x => {
+    const isMp4 = x.name.endsWith('.mp4');
+    h += '<tr><td>' + x.name + '</td><td>' + x.dur + 's</td><td>' +
+      (isMp4 ? '<video controls preload="none" src="/api/output/file?rel=' + encodeURIComponent(x.rel) + '" style="width:260px"></video>'
+             : '<audio controls preload="none" src="/api/output/file?rel=' + encodeURIComponent(x.rel) + '"></audio>') +
+      '</td><td><a href="/api/output/file?rel=' + encodeURIComponent(x.rel) + '" download>⬇ 下载</a></td></tr>';
+  });
+  h += '</table>';
+  $('batchResults').innerHTML = h;
+}
+
+// 等待计时器：显示"已等待 X 秒"，避免用户误以为卡死
+let waitTimer = null, waitStart = 0;
+function startWait(msgEl, base){
+  if (waitTimer) clearInterval(waitTimer);
+  waitStart = Date.now();
+  const tick = () => {
+    const s = Math.round((Date.now() - waitStart) / 1000);
+    msgEl.textContent = base + '（已等待 ' + s + ' 秒；首次加载模型约 1~2 分钟，请勿关闭页面）';
+  };
+  tick();
+  waitTimer = setInterval(tick, 1000);
+}
+function stopWait(){
+  if (waitTimer){ clearInterval(waitTimer); waitTimer = null; }
+}
+
+async function convertOne(){
+  const file = $('oneFile').files[0];
+  const rid = $('oneRole').value;
+  if (!file){ $('oneMsg').className='msg err'; $('oneMsg').textContent='请先选择文件'; return; }
+  if (!rid){ $('oneMsg').className='msg err'; $('oneMsg').textContent='请选择角色'; return; }
+  $('oneMsg').className='msg';
+  startWait($('oneMsg'), '转换中，请稍候…');
+  const fd = new FormData();
+  fd.append('audio', file);
+  fd.append('role_id', rid);
+  if ($('oneSeparate').checked) fd.append('separate', 'true');
+  try{
+    const r = await fetch('/api/convert_one', {method:'POST', body: fd});
+    const j = await r.json();
+    if (!r.ok){ $('oneMsg').className='msg err'; $('oneMsg').textContent = j.detail; return; }
+    $('onePlayer').src = j.wav;
+    let links = '<a href="' + j.wav + '" download>⬇ 下载 wav</a>';
+    if (j.mp4) links += ' &nbsp; <a href="' + j.mp4 + '" download>⬇ 下载 mp4（带画面）</a>';
+    $('oneLinks').innerHTML = links;
+    $('oneResult').style.display = 'block';
+    $('oneMsg').className='msg ok'; $('oneMsg').textContent = '完成 ✓';
+  }catch(e){ $('oneMsg').className='msg err'; $('oneMsg').textContent='请求失败：'+e; }
+  finally { stopWait(); }
+}
+
+async function loadOutputs(){
+  const r = await fetch('/api/status'); const j = await r.json();
+  const out = j.outputs || [];
+  if (!out.length){ $('outputs').innerHTML = '<span class="file-tag">暂无输出</span>'; return; }
+  let h = '<table><tr><th>文件</th><th>时长</th><th>大小</th><th>试听/播放</th><th>下载</th><th>操作</th></tr>';
+  out.forEach(x => {
+    const url = '/api/output/file?rel=' + encodeURIComponent(x.rel);
+    const isMp4 = x.name.endsWith('.mp4');
+    const enc = encodeURIComponent(x.rel);
+    h += '<tr><td>' + x.name + '<div class="file-tag">' + x.rel + '</div></td><td>' + x.dur + 's</td>' +
+         '<td>' + (x.size/1048576).toFixed(1) + ' MB</td><td>' +
+         (isMp4 ? '<video controls preload="none" src="' + url + '" style="width:240px"></video>'
+                : '<audio controls preload="none" src="' + url + '"></audio>') +
+         '</td><td><a href="' + url + '" download>⬇</a></td>' +
+         '<td><a href="javascript:;" onclick="delOutput(\'' + enc + '\')" title="删除该输出" style="color:#c0392b">🗑 删除</a></td></tr>';
+  });
+  h += '</table>';
+  $('outputs').innerHTML = h;
+}
+
+async function delOutput(encRel){
+  const rel = decodeURIComponent(encRel);
+  const isDir = !rel.includes('.');
+  if (!confirm('确定删除「' + rel + '」' + (isDir ? '（整个任务目录）' : '') + '？删除后不可恢复。')) return;
+  try {
+    const r = await fetch('/api/output/delete', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({rel})});
+    const j = await r.json();
+    if (!r.ok){ alert(j.detail || '删除失败'); return; }
+    loadOutputs();
+  } catch(e){ alert('请求失败：' + e); }
+}
+
+async function refreshStatus(){
+  const r = await fetch('/api/status'); const j = await r.json();
+  roles = j.roles || [];
+  statusChips(j.services || {});
+  fillRoles();
+  loadOutputs();
+}
+refreshStatus();
+setInterval(refreshStatus, 15000);
+</script>
+</body>
+</html>
