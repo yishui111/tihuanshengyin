@@ -65,3 +65,10 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
 ## 沟通与交付
 
 - 默认简体中文；改动后同步更新 README/DEPLOY/部署方案；保持本文件 <150 行。
+---
+### 关键点（2026-09-02 上传整理补充）
+- 自研层：hub 工作台 8000 + 4 个引擎封装 API：A=RVC 8010 / B=OpenVoice 8020 / C=SoVITS 8030 / D=GPT-SoVITS 8040（端口/引擎目录/解释器全部环境变量可覆盖）
+- 引擎源码与权重一律不入库；DEPLOY.md 记录固定 commit：RVC 81eed5e8f、GPT-SoVITS d523079f、OpenVoice 74a1d147、so-vits 4.1-Stable
+- 关键坑：功能 C 需 onnxruntime-gpu==1.17.1 + nvidia-cudnn-cu11（已写进 requirements）；B/工作台可 CPU，C/D 需 NVIDIA
+- requirements 除 onnxruntime 外多为宽松版本，torch 以各引擎 README 为准
+- 角色音色权重属授权资产不入库；stop.bat 保留 pause（双击体验）
