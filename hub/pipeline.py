@@ -127,13 +127,13 @@ def _convert_segment(role, seg_wav, out_wav):
     url = "http://127.0.0.1:%d/convert" % role["port"]
     with open(seg_wav, "rb") as f:
         files = {"audio": ("seg.wav", f, "audio/wav")}
-        if role["engine"] == "A":
-            data = {"character": role["character"], "auto_pitch": "true"}
-        elif role["engine"] == "C":
-            data = {"character": role["character"], "auto_pitch": "true"}
+        if role["engine"] in ("A", "C"):
+            # 训练音色（trained）只换音色：不做音高匹配，保持原音高/语调
+            data = {"character": role["character"],
+                    "auto_pitch": "false" if role.get("trained") else "true"}
         else:
             raise ValueError("引擎 %s 不支持批量逐段换声（请选 RVC 或 SoVITS 角色）" % role["engine_cn"])
-        r = requests.post(url, files=files, data=data, timeout=600)
+        r = requests.post(url, files=files, data=data, timeout=1800)
     if r.status_code != 200:
         raise RuntimeError("引擎转换失败(%s): %s" % (role["engine_cn"], r.text[:300]))
     with open(out_wav, "wb") as f:
@@ -235,7 +235,9 @@ def process_file(src, mapping, workdir, separate, out_root, log):
 
     converted = np.zeros(len(y), dtype="float32")
     count = 0
-    for seg in segs:
+    # 按说话人分组转换：同一人的所有段连续处理，引擎只需加载一次该模型；
+    # 换下一个人时引擎先卸载上一个模型再加载（显存里同时只有一个音色模型）
+    for seg in sorted(segs, key=lambda s: (s["label"], s["start"])):
         role = mapping.get(str(seg["label"]))
         if role is None:
             continue  # 该说话人未分配角色 → 保留原声

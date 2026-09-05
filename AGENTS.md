@@ -6,7 +6,7 @@
 ## 项目概述
 
 Windows 离线语音克隆/换声服务集合（模型本地加载，无需联网）：
-- 工作台（hub，8000）：文件夹批量说话人换声、单文件换声、输出浏览
+- 工作台（hub，8000）：**一键换音色（训练音色，核心功能）**、文件夹批量说话人换声、单文件换声、输出浏览
 - 功能A RVC 二次元角色换声（8010）
 - 功能B OpenVoice 任意人声克隆（8020）
 - 功能C SoVITS 中配角色换声（8030）
@@ -38,10 +38,14 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
    不引入需联网的 silero VAD；默认 `tau=0.15`。
 3. 说话人检测（hub/diarize.py）：能量 VAD → ECAPA 声纹（speechbrain
    `spkrec-ecapa-voxceleb`，离线缓存 `runtime\cache\`）→ 余弦距离层次聚类；
-   少数说话人需 ≥2 段或占比 ≥25% 才判为第二人。
+   少数说话人需 ≥2 段或占比 ≥25% 才判为第二人；最多按 4 人聚类；仅 2 段时
+   直接比声纹相似度（阈值 0.45：实测同人 ≈0.67 / 异人 ≈0.25）。
+   VAD 的 silence_gap 按"连续静音时长"切段（换气不切碎句子）。
 4. 逐段换声（hub/pipeline.py）：按说话人把语音段送 A/C 引擎 `/convert`
-   （只传 `character` + `auto_pitch=true`），按原时间轴拼回（段边界 45ms 淡入淡出）；
-   视频用 ffmpeg `-c:v copy -c:a aac` 混流，画面不重编码。D 不用于批量逐段（时长不保）。
+   （普通角色传 `auto_pitch=true`；训练音色传 `auto_pitch=false`），
+   **按说话人分组连续转换**（同人所有段一次处理完，减少引擎模型切换），
+   按原时间轴拼回（段边界 45ms 淡入淡出）；视频用 ffmpeg `-c:v copy -c:a aac`
+   混流，画面不重编码。D 不用于批量逐段（时长不保）。
    换声粒度：单说话人整段一次转换；多说话人先合并相邻同人段（间隔 ≤1.5s）再转换。
 5. hub 的 C 角色名换算：模型文件名（`nahida41_G_*.pth`/`randenEi_G_*.pth`）≠
    接口角色名（`nahida`/`raiden`），见 `hub/roles.py` 的 `C_CHAR_OVERRIDES`。
@@ -49,6 +53,21 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
    （`hub/server.py` 开头显式 `sys.path.insert(0, ...)`，其余服务靠 `os.chdir`+PATH）。
 7. 引擎目录一律通过环境变量可覆盖：`RVC_ROOT` / `SOVITS_SRC` / `GSV_ROOT` /
    `OV_CKPT` / `TMP_ROOT` / `API_PORT` / `HUB_PORT`；脚本优先 `runtime\pyXXX\python.exe`。
+8. **训练音色**（核心）：训练中心（换声模式）交付包 `交付模型\rvc\<角色>\` 整个文件夹
+   复制到 `rvc_service\models\<角色>\` 即自动识别（模仿文字驱动项目 tts_api 的目录扫描，
+   刷新即出现，无需注册）；hub 角色表 `id="T:<角色>"`、带 `trained=True`。
+   训练音色**只换音色，禁止变调**：A 引擎侧 `discover_trained()` 识别后强制 `f0_up_key=0`
+   忽略 auto_pitch（`get_vc` 靠 `weight_root` env 找模型，`_rvc_lock` 内临时翻转）；
+   hub 侧 `/api/swap`（一键换声）与 `pipeline._convert_segment` 对 trained 角色传
+   `auto_pitch=false`。hub→引擎的 HTTP 调用依赖 `no_proxy`（server.py 开头 setdefault）。
+9. **多人对话换声**（核心流程，卡片②）：`POST /api/swap_upload`（上传原视频/音频 →
+   排查说话人：几个人/各说多久/每人一段试听）→ 页面逐人分配训练音色 →
+   `POST /api/swap_multi`（按说话人分组替换，输出文件名用原上传名）。不做人声分离。
+10. **模型常驻显存管理**（RVC 服务）：同一模型连续转换不重载（`_current_model` 判断）；
+    换模型时 `_model_unload_locked()` 先清推理图缓存并把 net_g/pipeline 置 None 再
+    empty_cache——**禁用 `vc.get_vc("")`**（它 delattr 属性，下次 `if self.net_g is not
+    None` 会 AttributeError）。hub 在换声任务结束后调引擎 `/model/unload`（A/C 都有），
+    显存里同时只有一个音色模型、任务结束即清空。
 
 ## 已知问题（勿当新 bug 报）
 

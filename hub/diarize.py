@@ -69,25 +69,29 @@ def voice_segments(y, sr, min_dur=0.8, max_dur=15.0, silence_gap=0.4, min_rms=0.
     n = len(y)
     if n <= win:
         return [] if n < min_dur * sr else [(0, n)]
-    rms = np.array(
-        [
-            float(np.sqrt((y[i : i + win] ** 2).mean()))
-            for i in range(0, max(n - win, 1), hop)
-        ]
-    )
+    # 滑窗 RMS（cumsum 向量化，等价于逐帧 y[i:i+win].mean()）；
+    # 逐帧 Python 循环在长音频上要几十秒，向量化后毫秒级
+    x = np.concatenate(([0.0], np.cumsum(np.asarray(y, dtype=np.float64) ** 2)))
+    frames = max(1, (n - win) // hop + 1)
+    starts = np.arange(frames) * hop
+    rms = np.sqrt((x[starts + win] - x[starts]) / win)
     voiced = rms > min_rms
     segs = []
     start = None
+    last_voiced = None
     for i, v in enumerate(voiced):
-        t = i * 0.01
-        if v and start is None:
-            start = i
-        elif not v and start is not None:
-            if t - start * 0.01 > silence_gap:
-                segs.append((start * hop, i * hop))
+        if v:
+            if start is None:
+                start = i
+            last_voiced = i
+        elif start is not None:
+            # 静音持续超过 silence_gap 才分段（按"距最近有声帧的时长"度量，
+            # 换气/短停顿不会把一句话切碎）
+            if (i - last_voiced) * 0.01 > silence_gap:
+                segs.append((start * hop, (last_voiced + 1) * hop))
                 start = None
     if start is not None:
-        segs.append((start * hop, n))
+        segs.append((start * hop, (last_voiced + 1) * hop))
     # 过滤过短段 + 切分超长段
     out = []
     for a, b in segs:
@@ -150,8 +154,15 @@ def decide_speakers(embeds, durations, min_cluster_ratio=0.12, sil_thr=0.10):
     from sklearn.metrics import silhouette_score
 
     E = embeds / (np.linalg.norm(embeds, axis=1, keepdims=True) + 1e-9)
+    if n == 2:
+        # 2 段没法用轮廓系数/占比规则，直接比两段声纹相似度：
+        # 实测同人段 ≈0.67、异人段 ≈0.15~0.25，阈值取中间偏保守的 0.45
+        sim = float(E[0] @ E[1])
+        if sim < 0.45:
+            return [0, 1], 2
+        return [0] * 2, 1
     dist = 1.0 - (E @ E.T)  # 余弦距离矩阵
-    for k in (2, 3):
+    for k in (2, 3, 4):  # 最多按 4 个说话人尝试（对话视频常见 3~4 人）
         if n < k + 1:
             break
         cl = AgglomerativeClustering(

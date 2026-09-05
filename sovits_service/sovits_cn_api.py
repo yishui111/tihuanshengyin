@@ -316,6 +316,29 @@ def list_models():
     return {"models": sorted(CHARACTERS.keys())}
 
 
+@app.post("/model/unload")
+def model_unload():
+    """卸载当前驻留的角色模型，释放显存（工作台任务结束后调用）。"""
+    with _svc_lock:
+        import gc
+
+        for k in list(_svc_cache):
+            try:
+                _svc_cache[k].unload_model()
+            except Exception:  # noqa: BLE001
+                pass
+            del _svc_cache[k]
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
+    return {"unloaded": True}
+
+
 @app.post("/convert")
 def convert(
     audio: UploadFile = File(...),

@@ -153,6 +153,16 @@ runtime\py310\Scripts\python.exe -m pip install -r requirements-py310.txt
 
 > 工作台会扫描 `weights\*.pth` 自动把角色加入下拉列表（`hub\roles.py`）。
 
+### 6.1b 训练音色（训练中心交付包）— `rvc_service\models\`
+
+| 文件 | 目标路径 | 来源 |
+|---|---|---|
+| 训练音色交付包 | `rvc_service\models\<角色名>\`（含 `<角色名>.pth` + `<角色名>.index`） | 训练中心（`启动训练中心-换声.bat`）训练完生成 `交付模型\rvc\<角色名>\`，**整个文件夹复制过来** |
+
+> 目录扫描自动识别，复制后刷新工作台即出现（无需注册/重启），角色 id 为 `T:<角色名>`。
+> 训练音色**只换音色，不改变音高/语调/时长**（引擎强制 `f0_up_key=0`，忽略 auto_pitch）；
+> 工作台首页「一键换音色」卡片即用它处理原视频/原音频。
+
 ### 6.2 功能C（SoVITS）— `sovits_service\`
 
 预训练放 `sovits_service\so-vits-svc-4.1-Stable\pretrain\`：

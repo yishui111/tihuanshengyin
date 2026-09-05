@@ -16,6 +16,7 @@
 """
 
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -29,6 +30,10 @@ import soundfile as sf
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 import uvicorn
+
+# 本服务与引擎服务的通信全走 127.0.0.1：禁止走系统/环境代理，
+# 否则设了 HTTP_PROXY 的机器上转换请求会被代理劫持导致全部失败
+os.environ.setdefault("no_proxy", "localhost,127.0.0.1,::1")
 
 # 以脚本方式运行（python hub/server.py）时，嵌入版 Python 不会自动把脚本目录
 # 加入 sys.path，这里显式补上，保证 diarize/pipeline/roles 可导入。
@@ -273,6 +278,8 @@ def run_batch_task(dirpath, items, opts):
         logger.exception("批量任务失败")
         set_state(running=False, ok=False, error="任务失败：%s" % exc)
         log("✘ 任务失败：%s" % exc)
+    finally:
+        _unload_engines()
 
 
 @app.post("/api/batch")
@@ -337,8 +344,196 @@ def output_delete(req: dict):
     return {"ok": True, "deleted": rel}
 
 
+def _rename_output(d, rel):
+    """把 process_file 的输出名（src_ 前缀）改回用户上传的原名前缀，返回新文件名。"""
+    orig = ""
+    op = os.path.join(d, "orig.txt")
+    if os.path.isfile(op):
+        with open(op, encoding="utf-8") as f:
+            orig = f.read().strip()
+    old_base = os.path.splitext(rel)[0]
+    if orig and old_base.startswith("src_"):
+        new_base = orig + "_" + old_base[len("src_"):]
+        for e in ((".mp4", ".wav") if rel.lower().endswith(".mp4") else (".wav",)):
+            old_f = os.path.join(d, old_base + e)
+            if os.path.isfile(old_f):
+                os.replace(old_f, os.path.join(d, new_base + e))
+        rel = new_base + os.path.splitext(rel)[1]
+    return rel
+
+
+def _task_links(d, rel):
+    dl = lambda n: "/api/one/download/%s/%s" % (os.path.basename(d), n)
+    if rel.lower().endswith(".mp4"):
+        return {"file": rel, "wav": dl(os.path.splitext(rel)[0] + ".wav"), "mp4": dl(rel)}
+    return {"file": rel, "wav": dl(rel), "mp4": None}
+
+
+@app.post("/api/swap")
+def swap(audio: UploadFile = File(...), voice: str = Form(...), separate: bool = Form(False)):
+    """一键换音色：原视频/音频 → 只把音色换成训练音色（音高/语调/时长保持原样）。
+
+    训练音色来自 rvc_service\\models\\<角色>\\（训练中心交付包，自动扫描）。
+    素材带背景音乐时勾 separate（先人声分离再换、音乐轨混回）；
+    多人对话的视频请用 /api/swap_upload（卡片②）逐人分配。
+    """
+    r = roles.role_by_id(voice)
+    if r is None or not r.get("trained"):
+        return JSONResponse({"detail": "训练音色不存在：%s（请把交付包复制到 rvc_service\\models\\）"
+                                      % voice}, status_code=400)
+    if not roles._port_open(r["port"]):
+        return JSONResponse({"detail": "换声引擎（端口 %d）未启动，请先 start.bat 启动"
+                                      % r["port"]}, status_code=400)
+    workdir = os.path.join(PROJECT_ROOT, "ziliao", "tmp_one")
+    os.makedirs(workdir, exist_ok=True)
+    d = os.path.join(workdir, uuid.uuid4().hex[:12])
+    os.makedirs(d, exist_ok=True)
+    fname = os.path.basename(audio.filename or "input.wav")
+    src = os.path.join(d, "src" + os.path.splitext(fname)[1].lower())
+    with open(src, "wb") as f:
+        shutil.copyfileobj(audio.file, f)
+    with open(os.path.join(d, "orig.txt"), "w", encoding="utf-8") as f:
+        f.write(os.path.splitext(fname)[0])
+    try:
+        out_file = pipeline.process_file(src, {"0": r}, d, bool(separate), d,
+                                         lambda m: logger.info(m))
+        if out_file is None:
+            return JSONResponse({"detail": "没有检测到可转换的人声"}, status_code=422)
+        rel = _rename_output(d, os.path.basename(out_file))
+        return _task_links(d, rel)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("一键换音色失败")
+        return JSONResponse({"detail": "换声失败：%s" % exc}, status_code=500)
+    finally:
+        _unload_engines()
+
+
+@app.post("/api/swap_upload")
+def swap_upload(audio: UploadFile = File(...)):
+    """多人对话换声第一步：上传原视频/音频 → 排查说话人。
+
+    返回检测到的说话人数、每人说话时长与一段试听样本，
+    页面据此让用户逐人分配训练音色（区分说话人用脚本：VAD + ECAPA 声纹聚类，非大模型）。
+    """
+    workdir = os.path.join(PROJECT_ROOT, "ziliao", "tmp_one")
+    os.makedirs(workdir, exist_ok=True)
+    d = os.path.join(workdir, uuid.uuid4().hex[:12])
+    os.makedirs(d, exist_ok=True)
+    fname = os.path.basename(audio.filename or "input.wav")
+    src = os.path.join(d, "src" + os.path.splitext(fname)[1].lower())
+    with open(src, "wb") as f:
+        shutil.copyfileobj(audio.file, f)
+    with open(os.path.join(d, "orig.txt"), "w", encoding="utf-8") as f:
+        f.write(os.path.splitext(fname)[0])
+    try:
+        raw_wav = os.path.join(d, "input.wav")
+        pipeline.extract_audio(src, raw_wav)
+        y, sr = sf.read(raw_wav, dtype="float32")
+        if y.ndim > 1:
+            y = y.mean(axis=1)
+        y = np.asarray(y, dtype="float32")
+        info = diarize.diarize(y, sr)
+        if info["n_speakers"] == 0:
+            return JSONResponse({"detail": "没有检测到人声，请确认文件里有清晰的说话声"},
+                                status_code=422)
+        by_spk = {}
+        for s in info["segments"]:
+            by_spk.setdefault(s["label"], []).append(s)
+        speakers = []
+        for label in sorted(by_spk):
+            segs = by_spk[label]
+            longest = max(segs, key=lambda s: s["dur"])
+            a, b = longest["start"], longest["end"]
+            sample = y[a:min(b, a + int(6 * sr))]
+            preview_name = "spk_%d.wav" % label
+            sf.write(os.path.join(d, preview_name), sample, sr)
+            speakers.append({
+                "label": label,
+                "dur": round(sum(s["dur"] for s in segs), 1),
+                "segs": len(segs),
+                "preview": "/api/one/download/%s/%s" % (os.path.basename(d), preview_name),
+            })
+        return {"task": os.path.basename(d), "n_speakers": info["n_speakers"],
+                "video": os.path.splitext(src)[1].lower() in VIDEO_EXTS,
+                "speakers": speakers}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("说话人排查失败")
+        return JSONResponse({"detail": "说话人排查失败：%s" % exc}, status_code=500)
+
+
+@app.post("/api/swap_multi")
+def swap_multi(task: str = Form(...), mapping: str = Form(...)):
+    """多人对话换声第二步：逐人分配训练音色 → 按说话人替换。
+
+    同一说话人的段连续转换（引擎只加载一次该模型），换人时引擎先卸载
+    上一个模型再加载下一个——显存里同时只有一个音色模型；任务结束即全部卸载。
+    """
+    d = os.path.join(PROJECT_ROOT, "ziliao", "tmp_one", os.path.basename(task))
+    srcs = [f for f in (os.listdir(d) if os.path.isdir(d) else []) if f.startswith("src.")]
+    if not srcs:
+        return JSONResponse({"detail": "任务不存在，请重新上传并排查"}, status_code=400)
+    src = os.path.join(d, srcs[0])
+    try:
+        mp = json.loads(mapping or "{}")
+    except ValueError:
+        return JSONResponse({"detail": "分配数据不合法"}, status_code=400)
+    if not mp:
+        return JSONResponse({"detail": "请至少给一个说话人分配音色"}, status_code=400)
+    role_map = {}
+    for label, rid in mp.items():
+        r = roles.role_by_id(str(rid))
+        if r is None:
+            return JSONResponse({"detail": "音色不存在：%s" % rid}, status_code=400)
+        if r["engine"] == "D":
+            return JSONResponse({"detail": "GPT-SoVITS 角色不支持逐段换声，请选训练音色/RVC/SoVITS 角色"},
+                                status_code=400)
+        role_map[str(label)] = r
+    try:
+        out_file = pipeline.process_file(src, role_map, d, False, d,
+                                         lambda m: logger.info(m))
+        if out_file is None:
+            return JSONResponse({"detail": "没有可转换的语音段"}, status_code=422)
+        rel = os.path.basename(out_file)
+        # 输出文件名用原上传名（去掉 process_file 的 src_ 前缀），用户拿到手即认得
+        orig = ""
+        op = os.path.join(d, "orig.txt")
+        if os.path.isfile(op):
+            orig = open(op, encoding="utf-8").read().strip()
+        old_base = os.path.splitext(rel)[0]
+        if orig and old_base.startswith("src_"):
+            new_base = orig + "_" + old_base[len("src_"):]
+            for e in ((".mp4", ".wav") if rel.lower().endswith(".mp4") else (".wav",)):
+                old_f = os.path.join(d, old_base + e)
+                if os.path.isfile(old_f):
+                    os.replace(old_f, os.path.join(d, new_base + e))
+            rel = new_base + os.path.splitext(rel)[1]
+        dl = lambda n: "/api/one/download/%s/%s" % (os.path.basename(d), n)
+        if rel.lower().endswith(".mp4"):
+            out = {"file": rel, "wav": dl(os.path.splitext(rel)[0] + ".wav"), "mp4": dl(rel)}
+        else:
+            out = {"file": rel, "wav": dl(rel), "mp4": None}
+        return out
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("多人换声失败")
+        return JSONResponse({"detail": "多人换声失败：%s" % exc}, status_code=500)
+    finally:
+        # 换完即卸载引擎里驻留的音色模型（任务结束显卡不占模型显存）
+        _unload_engines()
+
+
+def _unload_engines():
+    """通知各引擎服务卸载驻留模型（尽力而为，失败不影响换声结果）。"""
+    import requests
+
+    for port in (roles.PORTS["A"], roles.PORTS["C"]):
+        try:
+            requests.post("http://127.0.0.1:%d/model/unload" % port, timeout=60)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 @app.post("/api/convert_one")
-async def convert_one(
+def convert_one(
     audio: UploadFile = File(...),
     role_id: str = Form(...),
     separate: bool = Form(False),

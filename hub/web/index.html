@@ -45,14 +45,60 @@ a{color:#2e86de}
 <div class="wrap">
 <header>
   <h1>🎙 换声工作台</h1>
-  <span class="sub">单文件换声 · 文件夹批量说话人换声 · 视频换声</span>
+  <span class="sub">一键换音色 · 多人对话换声 · 批量换声（训练音色只换音色，音高语调不变）</span>
 </header>
 
 <div class="chips" id="chips">正在检测服务状态…</div>
 
+<!-- ============ 一键换音色（训练音色） ============ -->
+<div class="card">
+  <h2>① 一键换音色（只换音色，音高/语调保持原样）</h2>
+  <div class="row">
+    <input type="file" id="swapFile" accept="audio/*,video/*">
+  </div>
+  <div class="row">
+    <span style="font-size:13px;color:#555">换成训练音色：</span>
+    <select id="swapVoice"></select>
+    <label class="opt"><input type="checkbox" id="swapSeparate" checked> 人声分离（素材带背景音乐时勾选）</label>
+    <button class="green" onclick="doSwap()">开始换声</button>
+  </div>
+  <div class="msg" id="swapMsg"></div>
+  <div id="swapResult" style="display:none">
+    <audio id="swapPlayer" controls style="width:60%"></audio>
+    <div id="swapLinks" style="margin-top:6px"></div>
+  </div>
+  <div class="tip">💡 音色模型来自「训练中心-换声」模式的交付包：把 <b>交付模型\rvc\&lt;角色&gt;\</b>
+  整个文件夹复制到本项目 <b>rvc_service\models\</b> 下即自动出现（无需重启）。视频换声后画面不变，只替换声音。
+  多人对话的视频请用下面的<b>②多人对话换声</b>；二次元角色请用<b>③文件夹批量</b>（文件夹里放一个文件即可）或引擎A自己的页面（8010）。</div>
+</div>
+
+<!-- ============ 多人对话换声 ============ -->
+<div class="card">
+  <h2>② 多人对话换声（3~4 人对话：先排查说话人，再逐人分配音色）</h2>
+  <div class="row">
+    <input type="file" id="msFile" accept="audio/*,video/*">
+    <button onclick="msUpload()">上传并排查说话人</button>
+  </div>
+  <div class="msg" id="msMsg"></div>
+  <div id="msSpeakers" style="display:none">
+    <table>
+      <thead><tr><th>说话人</th><th>说话时长</th><th>试听确认</th><th>分配音色</th></tr></thead>
+      <tbody id="msRows"></tbody>
+    </table>
+    <div class="row" style="margin-top:10px">
+      <button class="green" onclick="msProcess()">开始换声</button>
+      <span class="file-tag">替换时按说话人逐个模型进行：一个模型转换完就从显存卸载，再进下一个，显卡不会爆</span>
+    </div>
+  </div>
+  <div id="msResult" style="display:none">
+    <div id="msPlayerBox" style="margin-top:6px"></div>
+    <div id="msLinks" style="margin-top:6px"></div>
+  </div>
+</div>
+
 <!-- ============ 批量换声 ============ -->
 <div class="card">
-  <h2>① 文件夹批量换声</h2>
+  <h2>③ 文件夹批量换声</h2>
   <div class="row">
     <input type="text" id="dirpath" placeholder="输入素材文件夹路径，例如 D:\素材\对话视频">
     <button id="btnScan" onclick="scanDir()">扫描文件夹</button>
@@ -79,28 +125,9 @@ a{color:#2e86de}
   <div id="batchResults"></div>
 </div>
 
-<!-- ============ 单文件换声 ============ -->
-<div class="card">
-  <h2>② 单文件换声</h2>
-  <div class="row">
-    <input type="file" id="oneFile" accept="audio/*,video/*">
-  </div>
-  <div class="row">
-    <span style="font-size:13px;color:#555">换成角色：</span>
-    <select id="oneRole"></select>
-    <label class="opt"><input type="checkbox" id="oneSeparate" checked> 人声分离</label>
-    <button onclick="convertOne()">开始转换</button>
-  </div>
-  <div class="msg" id="oneMsg"></div>
-  <div id="oneResult" style="display:none">
-    <audio id="onePlayer" controls style="width:60%"></audio>
-    <div id="oneLinks" style="margin-top:6px"></div>
-  </div>
-</div>
-
 <!-- ============ 输出文件 ============ -->
 <div class="card">
-  <h2>③ 最近输出（ziliao\输出）</h2>
+  <h2>④ 最近输出（ziliao\输出）</h2>
   <div class="msg" id="outMsg"></div>
   <div id="outputs"></div>
 </div>
@@ -120,22 +147,122 @@ function statusChips(svc){
   }).join('');
 }
 
-function fillRoles(){
-  const sel = $('oneRole');
-  sel.innerHTML = '<option value="">请选择角色</option>' + roles.map(r =>
-    '<option value="' + r.id + '">' + r.name + '（' + r.engine_cn + '）' + (r.online ? '' : ' ·离线') + '</option>'
-  ).join('');
+function fillSwapVoices(){
+  const tv = roles.filter(r => r.trained);
+  const sel = $('swapVoice');
+  sel.innerHTML = tv.length
+    ? tv.map(r => '<option value="' + r.id + '">' + r.name + '</option>').join('')
+    : '<option value="">（暂无——先把交付包复制到 rvc_service\\models\\）</option>';
+}
+
+// ===== 多人对话换声：上传 → 排查说话人 → 逐人分配音色 → 替换 =====
+let msTask = null;
+
+function msVoiceOptions(){
+  const tv = roles.filter(r => r.trained);
+  const opts = tv.map(r => '<option value="' + r.id + '">' + r.name + '</option>').join('');
+  return '<option value="">（不换，保留原声）</option>' + opts;
+}
+
+async function msUpload(){
+  const file = $('msFile').files[0];
+  if (!file){ $('msMsg').className='msg err'; $('msMsg').textContent='请先选择原视频或音频文件'; return; }
+  $('msMsg').className='msg';
+  startWait($('msMsg'), '上传并排查说话人中…（要完整听一遍音频分辨每个人，请耐心等）');
+  const fd = new FormData();
+  fd.append('audio', file);
+  try{
+    const r = await fetch('/api/swap_upload', {method:'POST', body: fd});
+    const j = await r.json();
+    if (!r.ok){ $('msMsg').className='msg err'; $('msMsg').textContent = j.detail; return; }
+    msTask = j.task;
+    $('msRows').innerHTML = j.speakers.map(s =>
+      '<tr><td><b>说话人' + (s.label+1) + '</b><div class="file-tag">' + s.segs + ' 段语音</div></td>' +
+      '<td>' + s.dur + 's</td>' +
+      '<td><audio controls preload="none" src="' + s.preview + '"></audio></td>' +
+      '<td><select class="msSel" data-label="' + s.label + '">' + msVoiceOptions() + '</select></td></tr>'
+    ).join('');
+    $('msSpeakers').style.display = 'block';
+    $('msResult').style.display = 'none';
+    $('msMsg').className = 'msg ok';
+    $('msMsg').textContent = '排查完成：这个' + (j.video ? '视频' : '音频') + '里检测到 ' +
+      j.n_speakers + ' 个说话人。逐个试听确认是谁，再给每个人分配训练音色（不换的保持原声）。';
+  }catch(e){ $('msMsg').className='msg err'; $('msMsg').textContent='请求失败：'+e; }
+  finally{ stopWait(); }
+}
+
+async function msProcess(){
+  if (!msTask){ $('msMsg').className='msg err'; $('msMsg').textContent='请先上传并排查说话人'; return; }
+  const mapping = {};
+  document.querySelectorAll('.msSel').forEach(sel => {
+    if (sel.value) mapping[sel.dataset.label] = sel.value;
+  });
+  if (!Object.keys(mapping).length){
+    $('msMsg').className='msg err'; $('msMsg').textContent='请至少给一个说话人分配音色'; return;
+  }
+  $('msMsg').className='msg';
+  startWait($('msMsg'), '多人换声中…（按说话人逐个模型替换：一个模型转完就卸载再进下一个）');
+  const fd = new FormData();
+  fd.append('task', msTask);
+  fd.append('mapping', JSON.stringify(mapping));
+  try{
+    const r = await fetch('/api/swap_multi', {method:'POST', body: fd});
+    const j = await r.json();
+    if (!r.ok){ $('msMsg').className='msg err'; $('msMsg').textContent = j.detail; return; }
+    let links = '';
+    if (j.mp4){
+      $('msPlayerBox').innerHTML = '<video controls src="' + j.mp4 + '" style="width:60%"></video>';
+      links = '<a href="' + j.mp4 + '" download>⬇ 下载换声后的视频（' + j.file + '）</a>' +
+              ' &nbsp; <a href="' + j.wav + '" download>⬇ 只下载音频 (wav)</a>';
+    } else {
+      $('msPlayerBox').innerHTML = '<audio controls src="' + j.wav + '" style="width:60%"></audio>';
+      links = '<a href="' + j.wav + '" download>⬇ 下载换声后的音频</a>';
+    }
+    $('msLinks').innerHTML = links;
+    $('msResult').style.display = 'block';
+    $('msMsg').className = 'msg ok';
+    $('msMsg').textContent = '完成 ✓（各说话人音高语调未变，只换了音色；模型已从显存卸载）';
+  }catch(e){ $('msMsg').className='msg err'; $('msMsg').textContent='请求失败：'+e; }
+  finally{ stopWait(); }
+}
+
+async function doSwap(){
+  const file = $('swapFile').files[0];
+  const vid = $('swapVoice').value;
+  if (!file){ $('swapMsg').className='msg err'; $('swapMsg').textContent='请先选择原视频或音频文件'; return; }
+  if (!vid){ $('swapMsg').className='msg err'; $('swapMsg').textContent='没有可用的训练音色'; return; }
+  $('swapMsg').className='msg';
+  startWait($('swapMsg'), '换声中，请稍候…');
+  const fd = new FormData();
+  fd.append('audio', file);
+  fd.append('voice', vid);
+  if ($('swapSeparate').checked) fd.append('separate', 'true');
+  try{
+    const r = await fetch('/api/swap', {method:'POST', body: fd});
+    const j = await r.json();
+    if (!r.ok){ $('swapMsg').className='msg err'; $('swapMsg').textContent = j.detail; return; }
+    $('swapPlayer').src = j.wav;
+    let links = '<a href="' + j.wav + '" download>⬇ 下载换声后的音频 (wav)</a>';
+    if (j.mp4) links += ' &nbsp; <a href="' + j.mp4 + '" download>⬇ 下载换声后的视频 (' + j.file + ')</a>';
+    $('swapLinks').innerHTML = links;
+    $('swapResult').style.display = 'block';
+    $('swapMsg').className='msg ok'; $('swapMsg').textContent = '完成 ✓（只换了音色，原音高/语调/时长未变）';
+  }catch(e){ $('swapMsg').className='msg err'; $('swapMsg').textContent='请求失败：'+e; }
+  finally{ stopWait(); }
 }
 
 function spkSelect(label, fileIdx){
   const d = analysis[fileIdx];
   if (!d || !d.n_speakers) return '<span class="file-tag">无人声/未分析</span>';
   const html = [];
+  // GPT-SoVITS（D）不支持逐段换声，不进入工作台下拉（用它自己的 8040 页面）
+  const selectable = roles.filter(r => r.engine !== 'D');
   for (let i = 0; i < d.n_speakers; i++){
     html.push('<span class="speaker-cell">说话人' + (i+1) + ': ' +
       '<select data-file="' + fileIdx + '" data-label="' + i + '" class="roleSel">' +
       '<option value="">（不换）</option>' +
-      roles.map(r => '<option value="' + r.id + '">' + r.name + '（' + r.engine_cn + '）</option>').join('') +
+      selectable.map(r => '<option value="' + r.id + '">' + r.name + '（' + r.engine_cn + '）'
+        + (r.trained ? ' ·训练' : '') + '</option>').join('') +
       '</select></span>');
   }
   return html.join('');
@@ -282,31 +409,6 @@ function stopWait(){
   if (waitTimer){ clearInterval(waitTimer); waitTimer = null; }
 }
 
-async function convertOne(){
-  const file = $('oneFile').files[0];
-  const rid = $('oneRole').value;
-  if (!file){ $('oneMsg').className='msg err'; $('oneMsg').textContent='请先选择文件'; return; }
-  if (!rid){ $('oneMsg').className='msg err'; $('oneMsg').textContent='请选择角色'; return; }
-  $('oneMsg').className='msg';
-  startWait($('oneMsg'), '转换中，请稍候…');
-  const fd = new FormData();
-  fd.append('audio', file);
-  fd.append('role_id', rid);
-  if ($('oneSeparate').checked) fd.append('separate', 'true');
-  try{
-    const r = await fetch('/api/convert_one', {method:'POST', body: fd});
-    const j = await r.json();
-    if (!r.ok){ $('oneMsg').className='msg err'; $('oneMsg').textContent = j.detail; return; }
-    $('onePlayer').src = j.wav;
-    let links = '<a href="' + j.wav + '" download>⬇ 下载 wav</a>';
-    if (j.mp4) links += ' &nbsp; <a href="' + j.mp4 + '" download>⬇ 下载 mp4（带画面）</a>';
-    $('oneLinks').innerHTML = links;
-    $('oneResult').style.display = 'block';
-    $('oneMsg').className='msg ok'; $('oneMsg').textContent = '完成 ✓';
-  }catch(e){ $('oneMsg').className='msg err'; $('oneMsg').textContent='请求失败：'+e; }
-  finally { stopWait(); }
-}
-
 async function loadOutputs(){
   const r = await fetch('/api/status'); const j = await r.json();
   const out = j.outputs || [];
@@ -344,7 +446,7 @@ async function refreshStatus(){
   const r = await fetch('/api/status'); const j = await r.json();
   roles = j.roles || [];
   statusChips(j.services || {});
-  fillRoles();
+  fillSwapVoices();
   loadOutputs();
 }
 refreshStatus();

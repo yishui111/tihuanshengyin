@@ -56,6 +56,10 @@ os.makedirs(TMP_ROOT, exist_ok=True)
 API_PORT = int(os.environ.get("API_PORT", "8010"))
 SEPARATE_MAX_SEC = int(os.environ.get("SEPARATE_MAX_SEC", "90"))  # 超过则自动分段转换
 
+# 训练音色模型目录（与文字驱动项目同款约定）：训练中心（换声模式）的交付包
+# 交付模型\rvc\<角色名>\ 整个文件夹复制到这里即自动识别，无需注册/重启
+TRAINED_DIR = os.environ.get("RVC_TRAINED_DIR", os.path.join(SCRIPT_DIR, "models"))
+
 # ---------------- 基础库 + RVC 仓库模块（必须已在 RVC_ROOT 下） ----------------
 import librosa
 import numpy as np
@@ -77,10 +81,86 @@ CHAR_TARGET_PITCH_HZ = {
 }
 
 _rvc_lock = threading.Lock()
+# 当前驻留显存的模型（绝对路径）。同一模型连续转换不重复加载；
+# 换模型时先卸载旧的再加载新的——显存里同时只有一个音色模型。
+_current_model = None
 
 # 常驻 RVC 推理实例（模型在 get_vc 时按角色懒加载）
 config = Config()
 vc = VC(config)
+
+
+def _model_unload_locked():
+    """在 _rvc_lock 内调用：把当前音色模型移出显存。
+
+    不用 vc.get_vc("")——它会 delattr(net_g/cpt/...)，而 get_vc 用
+    `if self.net_g is not None` 判断，属性被删后下次加载直接 AttributeError。
+    这里只清推理图缓存 + 把权重引用置 None + empty_cache（属性置 None 而非删除），
+    hubert 特征提取器保留复用。
+    """
+    global _current_model
+    if _current_model is None:
+        return
+    try:
+        from infer.vc.modules import clear_cuda_graph_cache
+
+        for attr in ("net_g", "pipeline"):
+            obj = getattr(vc, attr, None)
+            if obj is not None:
+                try:
+                    clear_cuda_graph_cache(obj)
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception:  # noqa: BLE001
+        pass
+    for attr in ("net_g", "pipeline"):
+        setattr(vc, attr, None)
+    import torch
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    _current_model = None
+    logger.info("音色模型已从显存卸载")
+
+
+def _model_load(path_abs):
+    """在 _rvc_lock 内调用：保证显存里只驻留这一个模型（换模型先卸载旧的）。"""
+    global _current_model
+    if _current_model == path_abs:
+        return  # 已是当前模型，直接复用（多段连续转换不重载）
+    _model_unload_locked()
+    vc.get_vc(os.path.basename(path_abs))
+    _current_model = path_abs
+    logger.info("已加载音色模型：%s", os.path.basename(path_abs))
+
+
+def discover_trained():
+    """扫描训练音色模型目录（rvc_service\\models\\<角色名>\\），返回 {角色名: {pth, index}}。
+
+    约定模仿文字驱动项目 tts_api：每角色一个子目录，优先 <角色名>.pth /
+    <角色名>.index，找不到时用目录内任意 .pth / .index 兜底；索引可选。
+    每次请求现扫现用（目录扫描开销极小），复制交付包进来"刷新即出现"。
+    """
+    out = {}
+    if not os.path.isdir(TRAINED_DIR):
+        return out
+    for name in sorted(os.listdir(TRAINED_DIR)):
+        d = os.path.join(TRAINED_DIR, name)
+        if not (os.path.isdir(d) and CHARACTER_RE.match(name or "")):
+            continue
+        files = os.listdir(d)
+        pth = os.path.join(d, name + ".pth")
+        if not os.path.isfile(pth):
+            pths = sorted(x for x in files if x.lower().endswith(".pth"))
+            pth = os.path.join(d, pths[0]) if pths else ""
+        if not pth:
+            continue  # 没有 .pth 的目录不算角色
+        idx = os.path.join(d, name + ".index")
+        if not os.path.isfile(idx):
+            idxs = sorted(x for x in files if x.lower().endswith(".index"))
+            idx = os.path.join(d, idxs[0]) if idxs else ""
+        out[name] = {"pth": pth, "index": idx or None}
+    return out
 
 
 def normalize_wav(src, workdir):
@@ -137,39 +217,54 @@ def rvc_convert(
     resample_sr,
     rms_mix_rate,
     speaker_id,
+    model_path=None,
+    index_path=None,
 ):
     if not CHARACTER_RE.match(character or ""):
         raise ValueError("character 名称不合法（仅允许字母/数字/下划线/中文）")
     model_name = character + ".pth"
-    model_path = os.path.join(os.environ["weight_root"], model_name)
-    if not os.path.isfile(model_path):
-        raise FileNotFoundError(
-            "模型不存在: %s（请放入 %s）" % (model_path, os.path.abspath(os.environ["weight_root"]))
-        )
-
-    # 自动找 index：先精确匹配 <角色名>.index（防止 Nahida/NahidaV2 这类前缀名互相串索引），
-    # 找不到再退回 RVC 的模糊匹配
-    simple = os.path.join(os.environ["outside_index_root"], character + ".index")
-    if os.path.isfile(simple):
-        index_path = simple
-    else:
-        index_path = get_index_path_from_model(model_name, int(speaker_id))
+    if model_path is None:
+        # 兜底角色：rvc\assets\weights\<角色名>.pth
+        model_path = os.path.join(os.environ["weight_root"], model_name)
+        if not os.path.isfile(model_path):
+            raise FileNotFoundError(
+                "模型不存在: %s（请放入 %s）" % (model_path, os.path.abspath(os.environ["weight_root"]))
+            )
+    if index_path is None:
+        # 自动找 index：先精确匹配 <角色名>.index（防止 Nahida/NahidaV2 这类前缀名互相串索引），
+        # 找不到再退回 RVC 的模糊匹配
+        simple = os.path.join(os.environ["outside_index_root"], character + ".index")
+        if os.path.isfile(simple):
+            index_path = simple
+        else:
+            index_path = get_index_path_from_model(model_name, int(speaker_id))
 
     with _rvc_lock:
-        vc.get_vc(model_name)  # 新版 RVC：按模型文件名加载
-        if int(resample_sr) == 0:  # 0 = 自动使用模型原始采样率（40k/48k 模型都通用）
-            resample_sr = int(vc.tgt_sr)
-        info, opt = vc.vc_single(
-            sid=int(speaker_id),
-            input_audio_path=os.path.abspath(input_wav),
-            f0_up_key=int(f0_up_key),
-            f0_method=f0_method,
-            file_index=index_path,
-            index_rate=float(index_rate),
-            resample_sr=int(resample_sr),
-            rms_mix_rate=float(rms_mix_rate),
-            protect=float(protect),
-        )
+        # get_vc 按 weight_root/<sid> 找模型；训练音色在 rvc_service\models 下，
+        # 请求期间临时指过去（转换被 _rvc_lock 串行化，env 翻转无竞态）
+        prev_weight_root = os.environ.get("weight_root")
+        mp_abs = os.path.abspath(model_path)
+        os.environ["weight_root"] = os.path.dirname(mp_abs)
+        try:
+            _model_load(mp_abs)
+            if int(resample_sr) == 0:  # 0 = 自动使用模型原始采样率（40k/48k 模型都通用）
+                resample_sr = int(vc.tgt_sr)
+            info, opt = vc.vc_single(
+                sid=int(speaker_id),
+                input_audio_path=os.path.abspath(input_wav),
+                f0_up_key=int(f0_up_key),
+                f0_method=f0_method,
+                file_index=index_path,
+                index_rate=float(index_rate),
+                resample_sr=int(resample_sr),
+                rms_mix_rate=float(rms_mix_rate),
+                protect=float(protect),
+            )
+        finally:
+            if prev_weight_root is None:
+                os.environ.pop("weight_root", None)
+            else:
+                os.environ["weight_root"] = prev_weight_root
         if not opt or opt[0] is None or opt[1] is None:
             raise RuntimeError("RVC 推理失败: %s" % info)
         tgt_sr, audio_np = opt  # 新版返回 numpy 音频 + 目标采样率
@@ -181,6 +276,7 @@ def rvc_convert(
 def rvc_convert_long(
     input_wav, workdir, character, f0_up_key, index_rate,
     protect, f0_method, resample_sr, rms_mix_rate, speaker_id,
+    model_path=None, index_path=None,
 ):
     """超长音频自动分段转换后拼接（电影/长录音用）。"""
     y, sr = librosa.load(input_wav, sr=44100, mono=True)
@@ -194,6 +290,7 @@ def rvc_convert_long(
         out_seg = rvc_convert(
             seg_path, character, f0_up_key, index_rate, protect,
             f0_method, resample_sr, rms_mix_rate, speaker_id,
+            model_path=model_path, index_path=index_path,
         )
         a, seg_sr = sf.read(out_seg)
         parts.append(a)
@@ -302,7 +399,35 @@ def index():
 def list_models():
     root = os.path.join(RVC_ROOT, os.environ["weight_root"])
     names = sorted(n[:-4] for n in os.listdir(root) if n.endswith(".pth"))
-    return {"models": names}
+    return {"models": names, "trained": sorted(discover_trained().keys())}
+
+
+@app.get("/model/status")
+def model_status():
+    import torch
+
+    reserved = (
+        torch.cuda.memory_reserved(0) // (1024 * 1024)
+        if torch.cuda.is_available() else 0
+    )
+    return {
+        "loaded": os.path.basename(_current_model) if _current_model else None,
+        "vram_reserved_mb": reserved,
+    }
+
+
+@app.post("/model/unload")
+def model_unload():
+    """把当前音色模型从显存卸载（换声任务完成后由工作台调用，释放显卡）。"""
+    with _rvc_lock:
+        _model_unload_locked()
+        import torch
+
+        if torch.cuda.is_available():
+            reserved = torch.cuda.memory_reserved(0) // (1024 * 1024)
+        else:
+            reserved = 0
+    return {"unloaded": True, "vram_reserved_mb": reserved}
 
 
 @app.post("/convert")
@@ -328,22 +453,34 @@ def convert(
 
         clean_file = normalize_wav(raw_file, workdir)
 
-        # 自动音高匹配：按素材实际音高对准角色音色，比固定变调更像
-        f0_key = auto_f0_up_key(clean_file, character, int(f0_up_key))
-
         try:
             dur = sf.info(clean_file).frames / sf.info(clean_file).samplerate
         except Exception:  # noqa: BLE001
             dur = 0
+
+        tinfo = discover_trained().get(character)
+        if tinfo:
+            # 训练音色（训练中心-换声模式交付的真人模型）：
+            # 只换音色，音高/语调/时长保持原样——强制 f0_up_key=0，忽略 auto_pitch
+            logger.info("训练音色 %s：f0_up_key=0（忽略 auto_pitch），只换音色", character)
+            convert_kwargs = dict(model_path=tinfo["pth"], index_path=tinfo["index"])
+            f0_key = 0
+        else:
+            # 自动音高匹配：按素材实际音高对准角色音色，比固定变调更像（二次元角色用）
+            f0_key = auto_f0_up_key(clean_file, character, int(f0_up_key))
+            convert_kwargs = {}
+
         if dur > SEPARATE_MAX_SEC:
             out_wav = rvc_convert_long(
                 clean_file, workdir, character, f0_key, index_rate, protect,
                 f0_method, resample_sr, rms_mix_rate, speaker_id,
+                **convert_kwargs
             )
         else:
             out_wav = rvc_convert(
                 clean_file, character, f0_key, index_rate, protect,
                 f0_method, resample_sr, rms_mix_rate, speaker_id,
+                **convert_kwargs
             )
 
         if background is not None:

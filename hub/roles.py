@@ -8,6 +8,7 @@
 
 import os
 import socket
+import time
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -44,13 +45,30 @@ CN_NAMES = {
 # （sovits_cn_api.py 的 CHARACTERS 键：nahida / raiden）不一致，需换算。
 C_CHAR_OVERRIDES = {"nahida41": "nahida", "randenEi": "raiden"}
 
+# 训练音色模型目录（模仿文字驱动项目"交付包放进来即识别"的约定）：
+# 训练中心（换声模式）交付包 交付模型\rvc\<角色>\ 整个文件夹复制到这里即自动出现。
+# 训练音色只换音色，不做音高匹配（音高/语调/时长保持原样）。
+TRAINED_DIR = os.environ.get("RVC_TRAINED_DIR") or os.path.join(
+    PROJECT_ROOT, "rvc_service", "models")
+
+
+# 端口探测结果短缓存：页面每 15 秒轮询 /api/status，逐角色逐次真实探测
+# 在引擎离线时每次要累计近 10 秒（0.4s 超时 × 离线角色数），加 3 秒 TTL 消掉
+_port_cache = {}  # port -> (monotonic 时间戳, 是否在线)
+
 
 def _port_open(port, timeout=0.4):
+    now = time.monotonic()
+    cached = _port_cache.get(port)
+    if cached and now - cached[0] < 3.0:
+        return cached[1]
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=timeout):
-            return True
+            online = True
     except OSError:
-        return False
+        online = False
+    _port_cache[port] = (now, online)
+    return online
 
 
 def load_roles():
@@ -97,6 +115,20 @@ def load_roles():
                     "id": "D:" + name, "engine": "D",
                     "engine_cn": ENGINE_CN["D"], "port": PORTS["D"],
                     "character": name, "name": CN_NAMES.get(name, name),
+                })
+
+    # ---- T：训练音色（RVC 引擎加载，训练中心交付包，rvc_service\models\<角色>\）----
+    if os.path.isdir(TRAINED_DIR):
+        for name in sorted(os.listdir(TRAINED_DIR)):
+            sub = os.path.join(TRAINED_DIR, name)
+            if os.path.isdir(sub) and any(
+                x.lower().endswith(".pth") for x in os.listdir(sub)
+            ):
+                roles.append({
+                    "id": "T:" + name, "engine": "A",
+                    "engine_cn": ENGINE_CN["A"], "port": PORTS["A"],
+                    "character": name, "name": CN_NAMES.get(name, name),
+                    "trained": True,
                 })
 
     # 在线状态统一刷新
