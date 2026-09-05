@@ -139,12 +139,12 @@ const $ = id => document.getElementById(id);
 let roles = [], curFiles = [], analysis = {};
 
 function statusChips(svc){
-  const names = {A:'RVC 角色', B:'OpenVoice', C:'SoVITS 中配', D:'GPT-SoVITS'};
-  $('chips').innerHTML = ['A','B','C','D'].map(k => {
-    const s = svc[k];
-    return '<span class="chip ' + (s.online ? 'on' : 'off') + '"><span class="dot"></span>' +
-           names[k] + ' · ' + s.port + (s.online ? ' 在线' : ' 离线') + '</span>';
-  }).join('');
+  // 只显示换声核心依赖的引擎A（RVC）；B/C/D 仅各自独立页面使用，
+  // 离线对训练音色换声无影响，不再展示
+  const s = svc.A || {online: false, port: 8010};
+  $('chips').innerHTML =
+    '<span class="chip ' + (s.online ? 'on' : 'off') + '"><span class="dot"></span>' +
+    '换声引擎 · ' + s.port + (s.online ? ' 在线' : ' 离线（换声功能不可用，请 start.bat 启动）') + '</span>';
 }
 
 function fillSwapVoices(){

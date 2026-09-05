@@ -6,7 +6,7 @@
 ## 项目概述
 
 Windows 离线语音克隆/换声服务集合（模型本地加载，无需联网）：
-- 工作台（hub，8000）：**一键换音色（训练音色，核心功能）**、文件夹批量说话人换声、单文件换声、输出浏览
+- 工作台（hub，8000）：**一键换音色（训练音色，核心功能）**、多人对话换声（排查说话人逐人分配）、文件夹批量说话人换声、输出浏览（2026-09-06 删除原"单文件换声"卡片④，能力并入①）
 - 功能A RVC 二次元角色换声（8010）
 - 功能B OpenVoice 任意人声克隆（8020）
 - 功能C SoVITS 中配角色换声（8030）
@@ -52,7 +52,10 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
 6. 各服务以脚本方式运行：若用嵌入版 Python 需确保脚本目录在 sys.path
    （`hub/server.py` 开头显式 `sys.path.insert(0, ...)`，其余服务靠 `os.chdir`+PATH）。
 7. 引擎目录一律通过环境变量可覆盖：`RVC_ROOT` / `SOVITS_SRC` / `GSV_ROOT` /
-   `OV_CKPT` / `TMP_ROOT` / `API_PORT` / `HUB_PORT`；脚本优先 `runtime\pyXXX\python.exe`。
+   `OV_CKPT` / `TMP_ROOT` / `API_PORT` / `HUB_PORT`；hub 侧引擎端口对应
+   `A_PORT`/`B_PORT`/`C_PORT`/`D_PORT`（引擎换端口时 hub 要同步指过去；
+   8010 被本机其它程序占用会出现"引擎在线但转换 404"的假象）；
+   脚本优先 `runtime\pyXXX\python.exe`。
 8. **训练音色**（核心）：训练中心（换声模式）交付包 `交付模型\rvc\<角色>\` 整个文件夹
    复制到 `rvc_service\models\<角色>\` 即自动识别（模仿文字驱动项目 tts_api 的目录扫描，
    刷新即出现，无需注册）；hub 角色表 `id="T:<角色>"`、带 `trained=True`。

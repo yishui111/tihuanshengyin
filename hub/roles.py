@@ -12,8 +12,16 @@ import time
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# 各引擎服务端口（与各自 bat 默认一致）
-PORTS = {"A": 8010, "B": 8020, "C": 8030, "D": 8040}
+# 各引擎服务端口（与各自 bat 默认一致）。
+# 引擎端口可单独覆盖（环境变量 A_PORT/B_PORT/C_PORT/D_PORT）——
+# 引擎侧用 API_PORT 改端口时，hub 侧要用对应 A_PORT 等变量指向新端口，
+# 否则 8010 被本机其它程序占用/抢占时会出现"引擎在线但转换 404"的假象。
+PORTS = {
+    "A": int(os.environ.get("A_PORT", "8010")),
+    "B": int(os.environ.get("B_PORT", "8020")),
+    "C": int(os.environ.get("C_PORT", "8030")),
+    "D": int(os.environ.get("D_PORT", "8040")),
+}
 
 # 引擎显示名
 ENGINE_CN = {"A": "RVC", "B": "OpenVoice", "C": "SoVITS", "D": "GPT-SoVITS"}

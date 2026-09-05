@@ -93,27 +93,18 @@ vc = VC(config)
 def _model_unload_locked():
     """在 _rvc_lock 内调用：把当前音色模型移出显存。
 
-    不用 vc.get_vc("")——它会 delattr(net_g/cpt/...)，而 get_vc 用
-    `if self.net_g is not None` 判断，属性被删后下次加载直接 AttributeError。
-    这里只清推理图缓存 + 把权重引用置 None + empty_cache（属性置 None 而非删除），
-    hubert 特征提取器保留复用。
+    卸载走 RVC 官方 vc.get_vc("")（内部清推理图缓存 + hubert + 权重并
+    empty_cache），但它会把 net_g/cpt/n_spk/hubert_model/tgt_sr 属性
+    **delattr** 掉，而 get_vc 用 `if self.net_g is not None` 判断，属性
+    缺失会让下次加载直接 AttributeError——所以卸载后立刻把这些属性
+    还原成 None。不要手工拆 net_g/pipeline：部分拆除后再次装载会在
+    rmvpe 加载时段错误（实测 0xC0000005）。
     """
     global _current_model
     if _current_model is None:
         return
-    try:
-        from infer.vc.modules import clear_cuda_graph_cache
-
-        for attr in ("net_g", "pipeline"):
-            obj = getattr(vc, attr, None)
-            if obj is not None:
-                try:
-                    clear_cuda_graph_cache(obj)
-                except Exception:  # noqa: BLE001
-                    pass
-    except Exception:  # noqa: BLE001
-        pass
-    for attr in ("net_g", "pipeline"):
+    vc.get_vc("")  # RVC 官方卸载分支
+    for attr in ("net_g", "cpt", "n_spk", "hubert_model", "tgt_sr"):
         setattr(vc, attr, None)
     import torch
 
