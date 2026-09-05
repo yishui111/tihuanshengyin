@@ -296,6 +296,10 @@ def batch(req: dict):
         p = it.get("path", "")
         if not p.startswith(os.path.normpath(dirpath)):
             return JSONResponse({"detail": "文件不在所选文件夹内：%s" % p}, status_code=400)
+        for rid in (it.get("speakers") or {}).values():
+            if str(rid).startswith("D:"):
+                return JSONResponse({"detail": "GPT-SoVITS 角色不支持逐段换声，请选训练音色/RVC/SoVITS 角色"},
+                                    status_code=400)
     if not start_task():
         return JSONResponse({"detail": "已有任务在处理中，请稍候"}, status_code=400)
     threading.Thread(target=run_batch_task, args=(dirpath, items, opts), daemon=True).start()
@@ -493,26 +497,8 @@ def swap_multi(task: str = Form(...), mapping: str = Form(...)):
                                          lambda m: logger.info(m))
         if out_file is None:
             return JSONResponse({"detail": "没有可转换的语音段"}, status_code=422)
-        rel = os.path.basename(out_file)
-        # 输出文件名用原上传名（去掉 process_file 的 src_ 前缀），用户拿到手即认得
-        orig = ""
-        op = os.path.join(d, "orig.txt")
-        if os.path.isfile(op):
-            orig = open(op, encoding="utf-8").read().strip()
-        old_base = os.path.splitext(rel)[0]
-        if orig and old_base.startswith("src_"):
-            new_base = orig + "_" + old_base[len("src_"):]
-            for e in ((".mp4", ".wav") if rel.lower().endswith(".mp4") else (".wav",)):
-                old_f = os.path.join(d, old_base + e)
-                if os.path.isfile(old_f):
-                    os.replace(old_f, os.path.join(d, new_base + e))
-            rel = new_base + os.path.splitext(rel)[1]
-        dl = lambda n: "/api/one/download/%s/%s" % (os.path.basename(d), n)
-        if rel.lower().endswith(".mp4"):
-            out = {"file": rel, "wav": dl(os.path.splitext(rel)[0] + ".wav"), "mp4": dl(rel)}
-        else:
-            out = {"file": rel, "wav": dl(rel), "mp4": None}
-        return out
+        rel = _rename_output(d, os.path.basename(out_file))
+        return _task_links(d, rel)
     except Exception as exc:  # noqa: BLE001
         logger.exception("多人换声失败")
         return JSONResponse({"detail": "多人换声失败：%s" % exc}, status_code=500)
@@ -530,41 +516,6 @@ def _unload_engines():
             requests.post("http://127.0.0.1:%d/model/unload" % port, timeout=60)
         except Exception:  # noqa: BLE001
             pass
-
-
-@app.post("/api/convert_one")
-def convert_one(
-    audio: UploadFile = File(...),
-    role_id: str = Form(...),
-    separate: bool = Form(False),
-):
-    """单文件换声：上传文件 + 角色 → 返回 wav（视频附带 mp4 下载链接）。"""
-    r = roles.role_by_id(role_id)
-    if r is None:
-        return JSONResponse({"detail": "角色不存在：%s" % role_id}, status_code=400)
-    if not roles._port_open(r["port"]):
-        return JSONResponse({"detail": "引擎 %s（端口 %d）未启动，请先启动对应服务"
-                                      % (r["engine_cn"], r["port"])}, status_code=400)
-    workdir = os.path.join(PROJECT_ROOT, "ziliao", "tmp_one")
-    os.makedirs(workdir, exist_ok=True)
-    d = os.path.join(workdir, uuid.uuid4().hex[:12])
-    os.makedirs(d, exist_ok=True)
-    src = os.path.join(d, audio.filename or "input.wav")
-    with open(src, "wb") as f:
-        shutil.copyfileobj(audio.file, f)
-    is_video = os.path.splitext(src)[1].lower() in VIDEO_EXTS
-    try:
-        out_file = pipeline.process_file(
-            src, {"0": r}, d, bool(separate), d, lambda m: logger.info(m))
-        if out_file is None:
-            return JSONResponse({"detail": "未检测到人声或没有可转换的段"}, status_code=422)
-        rel = os.path.basename(out_file)
-        return {"file": rel, "wav": "/api/one/download/%s/%s" % (os.path.basename(d), rel),
-                "mp4": "/api/one/download/%s/%s" % (os.path.basename(d), os.path.basename(out_file))
-                if is_video else None}
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("单文件转换失败")
-        return JSONResponse({"detail": "转换失败：%s" % exc}, status_code=500)
 
 
 @app.get("/api/one/download/{task_dir}/{filename}")
