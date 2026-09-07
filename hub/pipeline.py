@@ -128,9 +128,14 @@ def _convert_segment(role, seg_wav, out_wav):
     with open(seg_wav, "rb") as f:
         files = {"audio": ("seg.wav", f, "audio/wav")}
         if role["engine"] in ("A", "C"):
-            # 训练音色（trained）只换音色：不做音高匹配，保持原音高/语调
-            data = {"character": role["character"],
-                    "auto_pitch": "false" if role.get("trained") else "true"}
+            # 训练音色（trained）默认只换音色（保持原音高）；
+            # 角色带 f0_up_key 时表示"音高适配"，透传给引擎按半音变调
+            if role.get("trained"):
+                data = {"character": role["character"], "auto_pitch": "false",
+                        "allow_pitch": "true" if role.get("allow_pitch") else "false",
+                        "f0_up_key": str(int(role.get("f0_up_key") or 0))}
+            else:
+                data = {"character": role["character"], "auto_pitch": "true"}
         else:
             raise ValueError("引擎 %s 不支持批量逐段换声（请选 RVC 或 SoVITS 角色）" % role["engine_cn"])
         r = requests.post(url, files=files, data=data, timeout=1800)

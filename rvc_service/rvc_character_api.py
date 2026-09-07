@@ -49,11 +49,34 @@ os.environ.setdefault("index_root", "logs")
 os.environ.setdefault("outside_index_root", "assets/indices")
 os.environ.setdefault("rmvpe_root", "assets/rmvpe")
 os.environ.setdefault("no_proxy", "localhost,127.0.0.1,::1")
+# 必须禁用 RVC 的 CUDA 图捕获：它按固定输入形状捕获推理图，实际使用中
+# 音频长短不一，形状变化会复用旧图导致推理失败（工具层 tools/cuda_graph.py）
+os.environ["RVC_CUDA_GRAPH"] = "0"
 
 TMP_ROOT = os.environ.get("TMP_ROOT", os.path.join(SCRIPT_DIR, "tmp"))
 os.makedirs(TMP_ROOT, exist_ok=True)
 
+
 API_PORT = int(os.environ.get("API_PORT", "8010"))
+
+# 端口被占（本机其它程序/另一实例）时自动 +1 顺延：以实际 bind 测试为准
+# （连接探测在本机 TUN 代理下不可靠：对未监听端口会静默吞包）
+import socket as _sock
+for _ in range(6):
+    try:
+        _t = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        _t.bind(("0.0.0.0", API_PORT))
+        _t.close()
+        break
+    except OSError:
+        API_PORT += 1
+
+# 记录实际服务端口（start.bat/stop.bat 精确定位用）
+try:
+    with open(os.path.join(SCRIPT_DIR, "engine_port.txt"), "w") as _f:
+        _f.write(str(API_PORT))
+except OSError:
+    pass
 SEPARATE_MAX_SEC = int(os.environ.get("SEPARATE_MAX_SEC", "90"))  # 超过则自动分段转换
 
 # 训练音色模型目录（与文字驱动项目同款约定）：训练中心（换声模式）的交付包
@@ -427,6 +450,7 @@ def convert(
     character: str = Form(...),
     f0_up_key: int = Form(0),
     auto_pitch: bool = Form(True),
+    allow_pitch: bool = Form(False),
     f0_method: str = Form("rmvpe"),
     index_rate: float = Form(0.75),
     protect: float = Form(0.33),
@@ -452,10 +476,15 @@ def convert(
         tinfo = discover_trained().get(character)
         if tinfo:
             # 训练音色（训练中心-换声模式交付的真人模型）：
-            # 只换音色，音高/语调/时长保持原样——强制 f0_up_key=0，忽略 auto_pitch
-            logger.info("训练音色 %s：f0_up_key=0（忽略 auto_pitch），只换音色", character)
+            # 默认只换音色、音高保持原样；调用方显式 allow_pitch=true 时
+            # 才允许按传入的 f0_up_key 变调（工作台"音高适配"开关）
+            if allow_pitch:
+                f0_key = int(f0_up_key)
+                logger.info("训练音色 %s：音高适配开启 f0_up_key=%+d", character, f0_key)
+            else:
+                f0_key = 0
+                logger.info("训练音色 %s：f0_up_key=0（忽略 auto_pitch），只换音色", character)
             convert_kwargs = dict(model_path=tinfo["pth"], index_path=tinfo["index"])
-            f0_key = 0
         else:
             # 自动音高匹配：按素材实际音高对准角色音色，比固定变调更像（二次元角色用）
             f0_key = auto_f0_up_key(clean_file, character, int(f0_up_key))

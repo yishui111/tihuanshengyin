@@ -60,6 +60,7 @@ a{color:#2e86de}
     <span style="font-size:13px;color:#555">换成训练音色：</span>
     <select id="swapVoice"></select>
     <label class="opt"><input type="checkbox" id="swapSeparate" checked> 人声分离（素材带背景音乐时勾选）</label>
+    <label class="opt"><input type="checkbox" id="swapPitch" checked> 音高适配（明显更像目标音色；音调会向目标靠拢，不勾则保持原音调）</label>
     <button class="green" onclick="doSwap()">开始换声</button>
   </div>
   <div class="msg" id="swapMsg"></div>
@@ -237,6 +238,7 @@ async function doSwap(){
   fd.append('audio', file);
   fd.append('voice', vid);
   if ($('swapSeparate').checked) fd.append('separate', 'true');
+  if ($('swapPitch').checked) fd.append('pitch_adapt', 'true');
   try{
     const r = await fetch('/api/swap', {method:'POST', body: fd});
     const j = await r.json();

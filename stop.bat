@@ -1,12 +1,12 @@
 @echo off
 setlocal
 REM ============================================================
-REM  Stop ALL voice services - kills ONLY ports whose /health
-REM  answers as OUR services; ports used by other programs are
-REM  left alone. Honors fallback ports recorded by start.bat in
-REM  last_run_ports.txt.
+REM  Stop ALL voice services - kills ONLY listeners whose owning
+REM  process command line belongs to THIS project's scripts;
+REM  ports used by other programs are left alone. Honors fallback
+REM  ports recorded by start.bat in last_run_ports.txt.
 REM ============================================================
 echo Stopping voice services ...
-powershell -NoProfile -Command "$ports = @(); if (Test-Path ('%~dp0last_run_ports.txt')) { $ports += Get-Content ('%~dp0last_run_ports.txt') | ForEach-Object { [int]$_ } }; $ports += 8000,8010,8020,8030,8040; $ports = $ports | Select-Object -Unique; $names = '*hub*','*rvc-character*','*openvoice-clone*','*sovits-cn*','*gptsovits-cn*'; foreach ($p in $ports) { $c = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue; if (-not $c) { continue }; $ours = $false; $body=$null; try { $req = [System.Net.HttpWebRequest]::Create('http://127.0.0.1:'+${p}+'/health'); $req.Proxy = New-Object System.Net.WebProxy($null); $req.Timeout = 2000; $res = $req.GetResponse(); $body = (New-Object IO.StreamReader($res.GetResponseStream())).ReadToEnd(); $res.Close(); foreach ($n in $names) { if ($body -like $n) { $ours = $true } } } catch {}; if ($ours) { $c | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Write-Output ('port ' + $p + ' -> stopped') } else { Write-Output ('port ' + $p + ' -> other program, not touched') } }"
+powershell -NoProfile -Command "$root='%~dp0'; $ports = @(); if (Test-Path ($root + 'last_run_ports.txt')) { $ports += Get-Content ($root + 'last_run_ports.txt') | Where-Object { $_ -match '^[0-9]+$' } | ForEach-Object { [int]$_ } }; $ports += 8000,8010,8020,8030,8040; $ports = $ports | Select-Object -Unique; $markers = '*hub*server.py*','*rvc_character_api.py*','*openvoice_clone_api.py*','*sovits_cn_api.py*','*gptsovits_cn_api.py*'; foreach ($p in $ports) { $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue; if (-not $conns) { continue }; $killed = $false; foreach ($c in $conns) { $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c.OwningProcess) -ErrorAction SilentlyContinue; if (-not $proc) { Start-Sleep -Milliseconds 300; $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c.OwningProcess) -ErrorAction SilentlyContinue }; if ($proc) { $m = $false; foreach ($mk in $markers) { if ($proc.CommandLine -like $mk) { $m = $true } }; if ($m) { Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue; $killed = $true } } }; if ($killed) { Write-Output ('port ' + $p + ' -> stopped') } else { Write-Output ('port ' + $p + ' -> other program, not touched') } }"
 echo.
 pause

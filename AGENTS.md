@@ -27,7 +27,7 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
   `hub\pipeline.py`（批量管线）→ `hub\roles.py`（角色注册表）；
   `hub\roles.py` 的 `PORTS`/`CN_NAMES`/`C_CHAR_OVERRIDES` 是角色与端口的唯一事实来源之一。
 - 四个封装 API 头部注释写明了各自依赖的引擎目录、模型放置规则与环境变量。
-- 启停脚本：`start.bat`（支持 `A/B/C/D`、`stop`、`help` 参数）/ `stop.bat`（全部停止）。
+- 启停脚本：`start.bat`（支持 `A/B/C/D`、`stop`、`help` 参数）/ `stop.bat`（只停本项目服务，按进程命令行识别，不会误杀同机其它程序）。默认端口被其它程序占用时自动顺延（8000→8001…，引擎同理），实际端口写入 `hub\hub_port.txt` / `rvc_service\engine_port.txt`，hub 据此发现引擎（8010 被本机其它程序回环占用时尤其关键——会出现端口探测在线但转换 404 的假象）。
 - 自检：`GET /api/health`（hub）；`GET /health`（各引擎）；`POST /convert` 冒烟。
 
 ## 关键代码约定（非显而易见，改动时勿破坏）
@@ -75,6 +75,7 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
 ## 已知问题（勿当新 bug 报）
 
 - onnxruntime 必须 `==1.17.1`（CUDA 11.8）+ `nvidia-cudnn-cu11`，否则 SoVITS onnx 回退 CPU 极慢。
+- **RVC 引擎必须禁用 CUDA 图**：`rvc_character_api.py` 启动时设 `RVC_CUDA_GRAPH=0`。RVC 的 CUDA 图按固定输入形状捕获推理图，实际使用音频长短不一，形状变化会复用旧图导致推理直接失败（报错指向 rvc	ools\cuda_graph.py）——2026-09-06 实测定位。
 - 两人重叠说话无法完美分离；功能D 会把句子"重新说一遍"，保留原节奏用功能C。
 - 端口被占用：`set API_PORT=xxxx` / `set HUB_PORT=xxxx` 后重启。
 

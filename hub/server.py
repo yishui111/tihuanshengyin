@@ -55,6 +55,24 @@ VIDEO_EXTS = pipeline.VIDEO_EXTS
 ALL_EXTS = AUDIO_EXTS + VIDEO_EXTS
 
 os.makedirs(PREVIEW_DIR, exist_ok=True)
+
+# 端口被占时自动 +1 顺延（以实际 bind 测试为准）
+import socket as _sock
+for _ in range(6):
+    try:
+        _t = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        _t.bind(("0.0.0.0", API_PORT))
+        _t.close()
+        break
+    except OSError:
+        API_PORT += 1
+
+# 记录实际服务端口（start.bat/stop.bat 精确定位用，避免端口顺延后找不到）
+try:
+    with open(os.path.join(HUB_DIR, "hub_port.txt"), "w") as _f:
+        _f.write(str(API_PORT))
+except OSError:
+    pass
 os.makedirs(OUTPUT_ROOT, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -373,8 +391,28 @@ def _task_links(d, rel):
     return {"file": rel, "wav": dl(rel), "mp4": None}
 
 
+def _median_pitch(path):
+    """人声中位数基频（Hz）；测不出返回 None。"""
+    try:
+        import parselmouth
+        import soundfile as sf
+        y, sr = sf.read(path, dtype="float32")
+        if y.ndim > 1:
+            y = y.mean(axis=1)
+        snd = parselmouth.Sound(y.astype("float64"), sr)
+        f0 = snd.to_pitch_ac(time_step=0.01, voicing_threshold=0.35,
+                             pitch_floor=50, pitch_ceiling=1100).selected_array["frequency"]
+        f0 = f0[f0 > 0]
+        if len(f0) < 20:
+            return None
+        return float(np.median(f0))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @app.post("/api/swap")
-def swap(audio: UploadFile = File(...), voice: str = Form(...), separate: bool = Form(False)):
+def swap(audio: UploadFile = File(...), voice: str = Form(...),
+         separate: bool = Form(False), pitch_adapt: bool = Form(False)):
     """一键换音色：原视频/音频 → 只把音色换成训练音色（音高/语调/时长保持原样）。
 
     训练音色来自 rvc_service\\models\\<角色>\\（训练中心交付包，自动扫描）。
@@ -399,6 +437,29 @@ def swap(audio: UploadFile = File(...), voice: str = Form(...), separate: bool =
     with open(os.path.join(d, "orig.txt"), "w", encoding="utf-8") as f:
         f.write(os.path.splitext(fname)[0])
     try:
+        if pitch_adapt:
+            # 音高适配：把原声基频与目标音色参考音频的基频差
+            # 换算成半音，交给引擎变调——音色明显更像，但音调会向目标靠拢
+            _ref = os.path.join(roles.TRAINED_DIR, r["character"], "ref.wav")
+            _f_src = _median_pitch(src)
+            # 目标音高优先读 ref_pitch.txt（训练中心全量素材的中位数，稳定）；
+            # 没有再退回用 ref.wav 现测
+            _pitch_file = os.path.join(roles.TRAINED_DIR, r["character"], "ref_pitch.txt")
+            _f_tgt = None
+            if os.path.isfile(_pitch_file):
+                try:
+                    with open(_pitch_file) as _pf:
+                        _f_tgt = float(_pf.read().strip())
+                except ValueError:
+                    _f_tgt = None
+            if not _f_tgt:
+                _f_tgt = _median_pitch(_ref) if os.path.isfile(_ref) else None
+            if _f_src and _f_tgt:
+                import math
+                r["f0_up_key"] = int(round(12.0 * math.log2(_f_tgt / _f_src)))
+                r["allow_pitch"] = True
+                logger.info("音高适配：原声 %.0fHz → 目标 %.0fHz（%+d 半音）",
+                            _f_src, _f_tgt, r["f0_up_key"])
         out_file = pipeline.process_file(src, {"0": r}, d, bool(separate), d,
                                          lambda m: logger.info(m))
         if out_file is None:
