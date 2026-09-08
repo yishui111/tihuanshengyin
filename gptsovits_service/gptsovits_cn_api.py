@@ -68,6 +68,63 @@ CHARACTERS = {
         "ref": os.path.join(GSV_MODELS_DIR, "azhong", "ref.wav"),
         "ref_text": "",
     },
+# == 本机部署注册（2026-09-08，权重来自 wenziqudong 文字驱动 models，ref_text 自动读文件） ==
+    "dabing": {
+        "cn": "dabing(中配·GPT-SoVITS)",
+        "gpt": os.path.join(GSV_MODELS_DIR, "dabing", "dabing.ckpt"),
+        "sovits": os.path.join(GSV_MODELS_DIR, "dabing", "dabing.pth"),
+        "ref": os.path.join(GSV_MODELS_DIR, "dabing", "ref.wav"),
+        "ref_text": "",
+    },
+    "fengyanlin": {
+        "cn": "fengyanlin(中配·GPT-SoVITS)",
+        "gpt": os.path.join(GSV_MODELS_DIR, "fengyanlin", "fengyanlin.ckpt"),
+        "sovits": os.path.join(GSV_MODELS_DIR, "fengyanlin", "fengyanlin.pth"),
+        "ref": os.path.join(GSV_MODELS_DIR, "fengyanlin", "ref.wav"),
+        "ref_text": "",
+    },
+    "keai": {
+        "cn": "keai(中配·GPT-SoVITS)",
+        "gpt": os.path.join(GSV_MODELS_DIR, "keai", "keai.ckpt"),
+        "sovits": os.path.join(GSV_MODELS_DIR, "keai", "keai.pth"),
+        "ref": os.path.join(GSV_MODELS_DIR, "keai", "ref.wav"),
+        "ref_text": "",
+    },
+    "laolei": {
+        "cn": "laolei(中配·GPT-SoVITS)",
+        "gpt": os.path.join(GSV_MODELS_DIR, "laolei", "laolei.ckpt"),
+        "sovits": os.path.join(GSV_MODELS_DIR, "laolei", "laolei.pth"),
+        "ref": os.path.join(GSV_MODELS_DIR, "laolei", "ref.wav"),
+        "ref_text": "",
+    },
+    "liejun": {
+        "cn": "liejun(中配·GPT-SoVITS)",
+        "gpt": os.path.join(GSV_MODELS_DIR, "liejun", "liejun.ckpt"),
+        "sovits": os.path.join(GSV_MODELS_DIR, "liejun", "liejun.pth"),
+        "ref": os.path.join(GSV_MODELS_DIR, "liejun", "ref.wav"),
+        "ref_text": "",
+    },
+    "liuyanhua": {
+        "cn": "liuyanhua(中配·GPT-SoVITS)",
+        "gpt": os.path.join(GSV_MODELS_DIR, "liuyanhua", "liuyanhua.ckpt"),
+        "sovits": os.path.join(GSV_MODELS_DIR, "liuyanhua", "liuyanhua.pth"),
+        "ref": os.path.join(GSV_MODELS_DIR, "liuyanhua", "ref.wav"),
+        "ref_text": "",
+    },
+    "testnv": {
+        "cn": "testnv(中配·GPT-SoVITS)",
+        "gpt": os.path.join(GSV_MODELS_DIR, "testnv", "testnv.ckpt"),
+        "sovits": os.path.join(GSV_MODELS_DIR, "testnv", "testnv.pth"),
+        "ref": os.path.join(GSV_MODELS_DIR, "testnv", "ref.wav"),
+        "ref_text": "",
+    },
+    "wangyou1": {
+        "cn": "wangyou1(中配·GPT-SoVITS)",
+        "gpt": os.path.join(GSV_MODELS_DIR, "wangyou1", "wangyou1.ckpt"),
+        "sovits": os.path.join(GSV_MODELS_DIR, "wangyou1", "wangyou1.pth"),
+        "ref": os.path.join(GSV_MODELS_DIR, "wangyou1", "ref.wav"),
+        "ref_text": "",
+    },
 }
 
 # 启动前把 api.py 的参数填好（默认加载 ayaka），再导入 GPT-SoVITS api

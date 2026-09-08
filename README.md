@@ -134,7 +134,7 @@ start.bat help      查看用法与引擎说明
 | GPT-SoVITS 预训练（hubert/roberta/s1/s2 等） | 功能D | 见 GPT-SoVITS 官方安装说明 |
 | RVC 预训练（hubert_base / rmvpe） | 功能A | 见 RVC-WebUI 官方安装说明 |
 | SoVITS 预训练（vec-768/vec-256 ONNX、rmvpe.pt） | 功能C | 见 so-vits-svc 官方安装说明 |
-| ECAPA 声纹模型（speechbrain `spkrec-ecapa-voxceleb`） | 工作台说话人检测 | 首次运行自动下载到 `runtime\cache\`（离线放置法见 DEPLOY.md） |
+| ECAPA 声纹模型（speechbrain `spkrec-ecapa-voxceleb`） | 工作台说话人检测 | 联网机器运行 `runtime\py312\python.exe hub\download_ecapa.py` 一次性下载到 `runtime\cache\`（离线放置法见 DEPLOY.md） |
 | pymss 人声分离模型 `bs_roformer_voc_hyperacev2` | 工作台人声分离 | https://github.com/pymss-project/pymss （放入 `rvc_service\pymss_models\`） |
 | ffmpeg / ffprobe | 音频提取与视频混流 | https://ffmpeg.org/ （放入 `runtime\ffmpeg\bin\`） |
 | 角色音色权重（A/C/D） | 各引擎角色 | ⚠️ **自备**：本仓库不含任何角色权重与真人素材；用你自己的训练工程产出，或从你原来的部署拷贝（结构见 DEPLOY.md） |

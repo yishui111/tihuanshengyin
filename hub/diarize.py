@@ -44,12 +44,21 @@ def get_model():
         from speechbrain.inference.speaker import SpeakerRecognition
         from speechbrain.utils.fetching import LocalStrategy
 
-        _model = SpeakerRecognition.from_hparams(
-            source="speechbrain/spkrec-ecapa-voxceleb",
-            savedir=SPK_SAVEDIR,
-            local_strategy=LocalStrategy.COPY,
-            run_opts={"device": get_device()},
-        )
+        try:
+            _model = SpeakerRecognition.from_hparams(
+                source="speechbrain/spkrec-ecapa-voxceleb",
+                savedir=SPK_SAVEDIR,
+                local_strategy=LocalStrategy.COPY,
+                run_opts={"device": get_device()},
+            )
+        except Exception as exc:  # noqa: BLE001 —— 统一转成带修复指引的中文报错
+            raise RuntimeError(
+                "ECAPA 声纹模型未能加载（说话人检测依赖它）：%s。\n"
+                "请联网一次运行：runtime\\py312\\python.exe hub\\download_ecapa.py "
+                "（自动下载到 runtime\\cache\\hf_speaker_model + runtime\\cache\\huggingface）；"
+                "或从能联网的机器按 DEPLOY.md §6.5 把这两个缓存目录拷到本机对应位置后重启 hub。"
+                % exc
+            ) from exc
     return _model
 
 
