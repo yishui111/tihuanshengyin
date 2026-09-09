@@ -26,3 +26,11 @@ pymss
 funasr
 onnxruntime-gpu==1.17.1
 nvidia-cudnn-cu11
+
+# 说话人检测（hub/diarize.py 主后端）；版本必须整套固定，
+# 更高的 pyannote-core/metrics 会强拉 numpy>=2 破坏 onnxruntime
+pyannote-audio==3.3.2
+pyannote-core==5.0.0
+pyannote-database==5.1.3
+pyannote-metrics==3.2.0
+pyannote-pipeline==3.0.1

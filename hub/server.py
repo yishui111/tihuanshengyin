@@ -474,7 +474,7 @@ def swap(audio: UploadFile = File(...), voice: str = Form(...),
 
 
 @app.post("/api/swap_upload")
-def swap_upload(audio: UploadFile = File(...)):
+def swap_upload(audio: UploadFile = File(...), separate: bool = Form(False)):
     """多人对话换声第一步：上传原视频/音频 → 排查说话人。
 
     返回检测到的说话人数、每人说话时长与一段试听样本，
@@ -497,7 +497,18 @@ def swap_upload(audio: UploadFile = File(...)):
         if y.ndim > 1:
             y = y.mean(axis=1)
         y = np.asarray(y, dtype="float32")
-        info = diarize.diarize(y, sr)
+        # 勾了人声分离：说话人检测/试听都在干净人声轨上做（更准）；
+        # 背景音乐轨存进任务目录，转换步（swap_multi）直接复用，
+        # 保证两步用的是同一份分离结果和说话人标签
+        ana = y
+        if separate:
+            logger.info("人声分离（去背景音乐）...")
+            vocals, music = pipeline.separate_vocals(y, sr)
+            sf.write(os.path.join(d, "music.wav"), music, sr)
+            ana = vocals
+        info = diarize.diarize(ana, sr)
+        with open(os.path.join(d, "diarize.json"), "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False)
         if info["n_speakers"] == 0:
             return JSONResponse({"detail": "没有检测到人声，请确认文件里有清晰的说话声"},
                                 status_code=422)
@@ -509,7 +520,7 @@ def swap_upload(audio: UploadFile = File(...)):
             segs = by_spk[label]
             longest = max(segs, key=lambda s: s["dur"])
             a, b = longest["start"], longest["end"]
-            sample = y[a:min(b, a + int(6 * sr))]
+            sample = ana[a:min(b, a + int(6 * sr))]
             preview_name = "spk_%d.wav" % label
             sf.write(os.path.join(d, preview_name), sample, sr)
             speakers.append({
@@ -554,8 +565,33 @@ def swap_multi(task: str = Form(...), mapping: str = Form(...)):
                                 status_code=400)
         role_map[str(label)] = r
     try:
-        out_file = pipeline.process_file(src, role_map, d, False, d,
-                                         lambda m: logger.info(m))
+        # 复用排查步存下的分离轨与说话人结果，保证与用户分配时看到的标签一致
+        stems = None
+        music_path = os.path.join(d, "music.wav")
+        if os.path.exists(music_path):
+            raw_wav = os.path.join(d, "input.wav")
+            if not os.path.exists(raw_wav):
+                pipeline.extract_audio(src, raw_wav)
+            y, sr = sf.read(raw_wav, dtype="float32")
+            if y.ndim > 1:
+                y = y.mean(axis=1)
+            music_y, music_sr = sf.read(music_path, dtype="float32")
+            if music_sr != sr:
+                import librosa
+                music_y = librosa.resample(music_y, orig_sr=music_sr, target_sr=sr)
+            n = min(len(y), len(music_y))
+            if len(music_y) < n:
+                music_y = np.pad(music_y, (0, n - len(music_y)))
+            music_y = music_y[:n]
+            stems = ((y[:n] - music_y).astype("float32"), music_y.astype("float32"))
+        diarize_info = None
+        info_path = os.path.join(d, "diarize.json")
+        if os.path.exists(info_path):
+            with open(info_path, encoding="utf-8") as f:
+                diarize_info = json.load(f)
+        out_file = pipeline.process_file(src, role_map, d, stems is not None, d,
+                                         lambda m: logger.info(m),
+                                         stems=stems, diarize_info=diarize_info)
         if out_file is None:
             return JSONResponse({"detail": "没有可转换的语音段"}, status_code=422)
         rel = _rename_output(d, os.path.basename(out_file))

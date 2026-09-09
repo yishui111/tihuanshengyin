@@ -36,11 +36,14 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
    （曾因共用 `normalized.wav` 导致素材被参考覆盖）。
 2. 功能B：音色向量用能量 VAD 分段 + 多段平均（`extract_se_robust`），
    不引入需联网的 silero VAD；默认 `tau=0.15`。
-3. 说话人检测（hub/diarize.py）：能量 VAD → ECAPA 声纹（speechbrain
-   `spkrec-ecapa-voxceleb`，离线缓存 `runtime\cache\`）→ 余弦距离层次聚类；
-   少数说话人需 ≥2 段或占比 ≥25% 才判为第二人；最多按 4 人聚类；仅 2 段时
-   直接比声纹相似度（阈值 0.45：实测同人 ≈0.67 / 异人 ≈0.25）。
-   VAD 的 silence_gap 按"连续静音时长"切段（换气不切碎句子）。
+3. 说话人检测（hub/diarize.py，2026-09-09 升级）：主后端 pyannote
+   speaker-diarization-3.1（模型离线缓存在 `runtime\cache\pyannote\hf\`，
+   由环境变量 `PYANNOTE_CACHE` 指向，见 DEPLOY.md）；模型缺失或推理异常时
+   自动回退旧后端（能量 VAD → speechbrain ECAPA → 余弦距离层次聚类，
+   函数保留在 diarize.py 内）。pyannote 输出经"夹心过滤"（夹在同说话人
+   之间的短促误标段且比两侧都短时归回两侧）+ 相邻同标签段合并。
+   **torch/pyannote 必须先于 librosa 导入**（librosa 依赖链会抢先加载 CUDA
+   DLL 导致 torch 的 caffe2_nvrtc.dll 加载失败），diarize.py 已在模块级预热。
 4. 逐段换声（hub/pipeline.py）：按说话人把语音段送 A/C 引擎 `/convert`
    （普通角色传 `auto_pitch=true`；训练音色传 `auto_pitch=false`），
    **按说话人分组连续转换**（同人所有段一次处理完，减少引擎模型切换），
@@ -52,9 +55,10 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
 6. 各服务以脚本方式运行：若用嵌入版 Python 需确保脚本目录在 sys.path
    （`hub/server.py` 开头显式 `sys.path.insert(0, ...)`，其余服务靠 `os.chdir`+PATH）。
 7. 引擎目录一律通过环境变量可覆盖：`RVC_ROOT` / `SOVITS_SRC` / `GSV_ROOT` /
-   `OV_CKPT` / `TMP_ROOT` / `API_PORT` / `HUB_PORT`；hub 侧引擎端口对应
-   `A_PORT`/`B_PORT`/`C_PORT`/`D_PORT`（引擎换端口时 hub 要同步指过去；
-   8010 被本机其它程序占用会出现"引擎在线但转换 404"的假象）；
+   `OV_CKPT` / `TMP_ROOT` / `API_PORT` / `HUB_PORT`；hub 侧引擎端口优先级为
+   **环境变量 `A_PORT`/`B_PORT`/`C_PORT`/`D_PORT` > 引擎自报端口文件
+   （`rvc_service\engine_port.txt` 等，hub/roles.py `_engine_port()` 读取）> 默认值**，
+   引擎被抢占端口自动顺延后 hub 重启即自动跟随；
    脚本优先 `runtime\pyXXX\python.exe`。
 8. **训练音色**（核心）：训练中心（换声模式）交付包 `交付模型\rvc\<角色>\` 整个文件夹
    复制到 `rvc_service\models\<角色>\` 即自动识别（模仿文字驱动项目 tts_api 的目录扫描，
@@ -64,8 +68,11 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
    hub 侧 `/api/swap`（一键换声）与 `pipeline._convert_segment` 对 trained 角色传
    `auto_pitch=false`。hub→引擎的 HTTP 调用依赖 `no_proxy`（server.py 开头 setdefault）。
 9. **多人对话换声**（核心流程，卡片②）：`POST /api/swap_upload`（上传原视频/音频 →
-   排查说话人：几个人/各说多久/每人一段试听）→ 页面逐人分配训练音色 →
-   `POST /api/swap_multi`（按说话人分组替换，输出文件名用原上传名）。不做人声分离。
+   排查说话人：几个人/各说多久/每人一段试听；可勾选 `separate` 人声分离，
+   分离出的背景音乐轨存任务目录 `music.wav`、说话人结果存 `diarize.json`）→
+   页面逐人分配训练音色 → `POST /api/swap_multi`（复用 music.wav/diarize.json，
+   保证转换步与用户分配时看到同一份分离结果和标签；按说话人分组替换，
+   输出文件名用原上传名）。
 10. **模型常驻显存管理**（RVC 服务）：同一模型连续转换不重载（`_current_model` 判断）；
     换模型时 `_model_unload_locked()` 先清推理图缓存并把 net_g/pipeline 置 None 再
     empty_cache——**禁用 `vc.get_vc("")`**（它 delattr 属性，下次 `if self.net_g is not
@@ -75,6 +82,16 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
 ## 已知问题（勿当新 bug 报）
 
 - onnxruntime 必须 `==1.17.1`（CUDA 11.8）+ `nvidia-cudnn-cu11`，否则 SoVITS onnx 回退 CPU 极慢。
+- **py312 运行时的 torch 必须保持 2.7.1+cu118、numpy<2**：pyannote-audio 4.x
+  （含 community-1）要求 torch≥2.8 且强拉 torchcodec/numpy≥2，**禁止装进
+  runtime\py312**；hub/diarize.py 只用 pyannote 3.3.2，且整套 pyannote-core/
+  database/metrics/pipeline 版本已在 requirements-py312.txt 固定（新版会强拉
+  numpy≥2 破坏 onnxruntime）。给 py312 装任何包前先想清楚依赖会不会动
+  torch/numpy，必要时 `--no-deps`。torch>=2.6 默认 `weights_only=True` 会拒绝
+  pyannote 3.3.2 的老式 checkpoint，diarize.py 已做兼容补丁。
+- 8010 回环被其它程序占用时：引擎若已抢先绑定 0.0.0.0:8010 仍会被更精确的
+  127.0.0.1:8010 抢走回环流量，表现为"探测在线但 /convert 404"；处置见
+  `hub/roles.py` 端口优先级（引擎顺延到 8011 写 engine_port.txt，hub 自动跟随）。
 - **RVC 引擎必须禁用 CUDA 图**：`rvc_character_api.py` 启动时设 `RVC_CUDA_GRAPH=0`。RVC 的 CUDA 图按固定输入形状捕获推理图，实际使用音频长短不一，形状变化会复用旧图导致推理直接失败（报错指向 rvc	ools\cuda_graph.py）——2026-09-06 实测定位。
 - 两人重叠说话无法完美分离；功能D 会把句子"重新说一遍"，保留原节奏用功能C。
 - 端口被占用：`set API_PORT=xxxx` / `set HUB_PORT=xxxx` 后重启。

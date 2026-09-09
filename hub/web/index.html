@@ -79,6 +79,7 @@ a{color:#2e86de}
   <div class="row">
     <input type="file" id="msFile" accept="audio/*,video/*">
     <button onclick="msUpload()">上传并排查说话人</button>
+    <label class="opt"><input type="checkbox" id="msSeparate"> 人声分离（素材带背景音乐时勾选，说话人排查更准）</label>
   </div>
   <div class="msg" id="msMsg"></div>
   <div id="msSpeakers" style="display:none">
@@ -172,6 +173,7 @@ async function msUpload(){
   startWait($('msMsg'), '上传并排查说话人中…（要完整听一遍音频分辨每个人，请耐心等）');
   const fd = new FormData();
   fd.append('audio', file);
+  if ($('msSeparate').checked) fd.append('separate', 'true');
   try{
     const r = await fetch('/api/swap_upload', {method:'POST', body: fd});
     const j = await r.json();

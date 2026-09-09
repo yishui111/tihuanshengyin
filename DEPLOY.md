@@ -37,7 +37,7 @@
 │   ├─ py310\                      #    Python 3.10 环境（功能B 用）
 │   ├─ py312\                      #    Python 3.12 环境（工作台+A/C/D 用）
 │   ├─ ffmpeg\bin\{ffmpeg,ffprobe}.exe
-│   └─ cache\{hf_speaker_model,huggingface,torch}
+│   └─ cache\{hf_speaker_model,huggingface,torch,pyannote}
 ├─ start.bat / stop.bat
 └─ README.md / DEPLOY.md / 部署方案.md / AGENTS.md
 ```
@@ -89,6 +89,7 @@ py -3.12 -m venv runtime\py312
 
 ```bat
 mkdir runtime\cache\hf_speaker_model runtime\cache\huggingface runtime\cache\torch
+mkdir runtime\cache\pyannote\hf
 ```
 
 ---
@@ -125,6 +126,13 @@ runtime\py312\Scripts\python.exe -m pip install -r requirements-py312.txt
 **重要版本坑**：onnxruntime 必须 `==1.17.1`（CUDA 11.8 版，配合 `nvidia-cudnn-cu11` 提供 cudnn64_8.dll）；
 升到 1.18+ 会因缺少 CUDA 12 dll 使 onnx 回退 CPU，SoVITS 首次加载 80 秒+（像卡死）。
 功能C 代码启动时会自动把 `runtime\py312\Lib\site-packages\nvidia\*\bin` 与 torch dll 目录注入 PATH。
+
+> **pyannote 安装坑（说话人检测）**：requirements 里 pyannote 全家族已整套固定
+> （pyannote-audio==3.3.2 + pyannote-core==5.0.0 / database==5.1.3 / metrics==3.2.0 /
+> pipeline==3.0.1）。更高版本会强拉 numpy≥2 / torch≥2.8，直接破坏 onnxruntime 和
+> RVC 的 CUDA 环境——**不要单独升级其中任何一个**；确实装坏了就把
+> torch/torchaudio 恢复为 `2.7.1+cu118`（`--index-url https://download.pytorch.org/whl/cu118`）、
+> numpy 恢复为 `1.26.4`，再整套重装固定版本的 pyannote。
 
 ### 5.2 py310 环境（功能B，OpenVoice）
 
@@ -210,8 +218,49 @@ models\klee_G.pth / klee.json / klee_kmeans.pt   （kmeans 索引角色）
 
 | 模型 | 目标 | 说明 |
 |---|---|---|
-| ECAPA 声纹（说话人检测） | `runtime\cache\hf_speaker_model\` + `runtime\cache\huggingface\` | 首次联网运行 `python hub\server.py` 会自动从 speechbrain（`spkrec-ecapa-voxceleb`）下载并缓存；之后离线。也可提前在能联网的机器上把缓存目录整个拷过来 |
+| pyannote speaker-diarization-3.1（说话人检测主后端） | `runtime\cache\pyannote\`（结构见下方「pyannote 模型离线放置」） | 官方 HF 仓库是 gated 的；用下方转载源或自有 token 下载，文件校验一致即可 |
+| ECAPA 声纹（说话人检测回退后端） | `runtime\cache\hf_speaker_model\` + `runtime\cache\huggingface\` | 首次联网运行 `python hub\server.py` 会自动从 speechbrain（`spkrec-ecapa-voxceleb`）下载并缓存；之后离线。也可提前在能联网的机器上把缓存目录整个拷过来 |
 | 人声分离 `bs_roformer_voc_hyperacev2` | `rvc_service\pymss_models\vocal\vocal_extraction\{bs_roformer_voc_hyperacev2.ckpt, bs_roformer_voc_hyperacev2.yaml}` | 来自 pymss（https://github.com/pymss-project/pymss），按官方下载到该目录；工作台批量换声勾选「人声分离」时才需要 |
+
+#### pyannote 模型离线放置（hub/diarize.py 主后端）
+
+pyannote 通过环境变量 `PYANNOTE_CACHE`（hub/diarize.py 已自动设为
+`runtime\cache\pyannote\hf`）按 huggingface_hub 离线缓存格式加载，目录结构：
+
+```
+runtime\cache\pyannote\
+├─ hf\models--pyannote--segmentation-3.0\
+│   ├─ refs\main                              （内容为一行 40 位十六进制串）
+│   └─ snapshots\<同一串>\config.yaml + pytorch_model.bin
+├─ hf\models--pyannote--wespeaker-voxceleb-resnet34-LM\
+│   ├─ refs\main
+│   └─ snapshots\<同一串>\config.yaml + pytorch_model.bin
+└─ speaker-diarization-3.1\config.yaml        （管线配置，指向上面两个模型 id）
+```
+
+下载源（官方 pyannote/* 仓库 gated，需账号接受条款 + token；以下转载已做
+sha256 交叉校验，与官方权重一致，经 hf-mirror 匿名可下）：
+
+| 文件 | 来源 |
+|---|---|
+| segmentation-3.0 两个文件 | `4evergr8/pyannote-segmentation-3.0`（与 ubitec、collinbarnwell 转载 sha256 一致：`da85c29829d4…`） |
+| wespeaker 两个文件 | `Revai/pyannote-wespeaker-voxceleb-resnet34-LM`（与 fatymatariq 转载一致：`366edf44f4c8…`） |
+| 管线 config.yaml | `freevoid/speaker-diarization-3.1`（与 tensorlake/syvai 转载一致，segmentation 字段改回 `pyannote/segmentation-3.0`） |
+
+示例（Git Bash / curl）：
+
+```bash
+base=https://hf-mirror.com
+curl -L -o segmentation-config.yaml  $base/4evergr8/pyannote-segmentation-3.0/resolve/main/config.yaml
+curl -L -o segmentation-model.bin    $base/4evergr8/pyannote-segmentation-3.0/resolve/main/pytorch_model.bin
+curl -L -o wespeaker-config.yaml     $base/Revai/pyannote-wespeaker-voxceleb-resnet34-LM/resolve/main/config.yaml
+curl -L -o wespeaker-model.bin       $base/Revai/pyannote-wespeaker-voxceleb-resnet34-LM/resolve/main/pytorch_model.bin
+curl -L -o pipeline-config.yaml      $base/freevoid/speaker-diarization-3.1/resolve/main/config.yaml
+```
+
+下载后按上面目录树放置，`refs\main` 内容与 `snapshots\` 子目录名填同一个
+40 位十六进制串（内容随意但要合法十六进制，如 `0000…0001`）。
+模型不齐时 hub 不会挂：diarize.py 自动回退 ECAPA 聚类后端，日志有提示。
 
 ---
 
@@ -269,7 +318,7 @@ curl -X POST -F "audio=@<你的测试音频>.wav" -F "character=klee" http://127
 | C 首次加载 80 秒+ / 像卡死 | onnx 回退 CPU → 确认 `onnxruntime-gpu==1.17.1` + `nvidia-cudnn-cu11`（见 5.1） |
 | B 提示缺少 openvoice 包 | 没在 py310 里 `pip install -e` OpenVoice（见第四节④） |
 | D 提示缺少 ASR/模型 | 确认 `asr\SenseVoiceSmall\` 完整、`GPT-SoVITS\GPT_SoVITS\pretrained_models\` 就位 |
-| 说话人检测不准 | 重叠说话无法完美分离；素材清晰、单人/双人分开录 |
+| 说话人检测不准 | 已用 pyannote 3.1 主后端（模型缺失时自动回退 ECAPA 聚类，日志有提示）；重叠说话仍无法完美分离；素材带背景音乐勾「人声分离」 |
 | CPU 模式很慢 | 正常（10 秒音频约几十秒）；C/D 需 NVIDIA 显卡 |
 | 端口被占用 | 改对应 bat 顶部默认端口，或启动前 `set API_PORT=xxxx` / `set HUB_PORT=xxxx` |
 | 显存不足（<8GB） | 别同时开 A/B/C/D，只开需要的，如 `start.bat C` |

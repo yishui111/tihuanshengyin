@@ -18,7 +18,7 @@
 
 本项目把四种主流开源声音转换引擎统一封装成一套 **Windows 离线**声音替换工具：
 
-- 一个**统一工作台（hub）**做批量编排：扫描文件夹 → 自动检测每个音/视频里有几个说话人（VAD + 声纹聚类）→ 为每个说话人指定角色 → 自动逐段换声 → 视频画面不变、音轨替换后混流出 mp4；
+- 一个**统一工作台（hub）**做批量编排：扫描文件夹 → 自动检测每个音/视频里有几个说话人（pyannote 3.1 神经网络分离，ECAPA 声纹聚类兜底）→ 为每个说话人指定角色 → 自动逐段换声 → 视频画面不变、音轨替换后混流出 mp4；
 - 四个**独立引擎服务**（各自 FastAPI + 网页小界面）：RVC 二次元角色换声、OpenVoice 任意人声零样本克隆、SoVITS 中配角色换声、GPT-SoVITS「ASR 识别 + 重合成」。
 
 适合：视频/播客二创换音色、角色对话配音、把真人素材转成动漫角色音色等离线处理场景。
@@ -50,7 +50,7 @@
 tihuanshengyin/
 ├── hub/                        # 换声工作台（8000，自研编排层）
 │   ├── server.py               # FastAPI 主服务 + 批量任务调度
-│   ├── diarize.py              # VAD + ECAPA 声纹聚类 → 说话人检测
+│   ├── diarize.py              # pyannote 3.1 说话人检测（ECAPA 聚类兜底）
 │   ├── pipeline.py             # 批量管线：分离 → 逐段换声 → 拼接 → 混流
 │   ├── roles.py                # 角色注册表（A/C/D 合并、在线状态）
 │   └── web/index.html          # 工作台页面
@@ -134,7 +134,8 @@ start.bat help      查看用法与引擎说明
 | GPT-SoVITS 预训练（hubert/roberta/s1/s2 等） | 功能D | 见 GPT-SoVITS 官方安装说明 |
 | RVC 预训练（hubert_base / rmvpe） | 功能A | 见 RVC-WebUI 官方安装说明 |
 | SoVITS 预训练（vec-768/vec-256 ONNX、rmvpe.pt） | 功能C | 见 so-vits-svc 官方安装说明 |
-| ECAPA 声纹模型（speechbrain `spkrec-ecapa-voxceleb`） | 工作台说话人检测 | 首次运行自动下载到 `runtime\cache\`（离线放置法见 DEPLOY.md） |
+| pyannote speaker-diarization-3.1（分段+声纹，主后端） | 工作台说话人检测 | 离线包放置法见 DEPLOY.md「pyannote 模型」（本机已放在 `runtime\cache\pyannote\`） |
+| ECAPA 声纹模型（speechbrain `spkrec-ecapa-voxceleb`，回退后端） | 工作台说话人检测兜底 | 首次运行自动下载到 `runtime\cache\`（离线放置法见 DEPLOY.md） |
 | pymss 人声分离模型 `bs_roformer_voc_hyperacev2` | 工作台人声分离 | https://github.com/pymss-project/pymss （放入 `rvc_service\pymss_models\`） |
 | ffmpeg / ffprobe | 音频提取与视频混流 | https://ffmpeg.org/ （放入 `runtime\ffmpeg\bin\`） |
 | 角色音色权重（A/C/D） | 各引擎角色 | ⚠️ **自备**：本仓库不含任何角色权重与真人素材；用你自己的训练工程产出，或从你原来的部署拷贝（结构见 DEPLOY.md） |
@@ -157,7 +158,7 @@ git push origin main
 - **Q：`start.bat` 双击后服务窗口一闪而过？** A：通常是杀毒软件拦截 python.exe，把 `runtime\pyXXX\python.exe` 加入白名单后重试。
 - **Q：页面提示某引擎离线？** A：对应功能服务没启动或端口被占用，先 `start.bat A` 之类启动它；工作台顶部状态条可确认。
 - **Q：功能C 首次加载很慢 / 像卡死？** A：SoVITS 首个角色加载约 15~25 秒属正常；若 onnx 一直回退 CPU（首次加载 80 秒+），请确认装了 `onnxruntime-gpu==1.17.1`（CUDA 11.8 版），见 DEPLOY.md「常见问题」。
-- **Q：说话人检测不准？** A：两人重叠说话无法完美分离；素材尽量清晰、单人/双人分开录。
+- **Q：说话人检测不准？** A：2026-09-09 已升级为 pyannote 3.1 主后端（子段级神经网络判定，段内换人/轻声/带背景音场景显著更准），原 ECAPA 聚类仅作模型缺失时的兜底；素材带背景音乐记得勾「人声分离」。两人同时重叠说话仍无法完美切分。
 - **Q：无显卡能跑吗？** A：功能C/D 的推理代码走 CUDA，需要 NVIDIA 显卡；功能B 与工作台可 CPU（慢，10 秒音频约几十秒）；功能A 视 RVC 引擎构建（CUDA 版默认 GPU）。
 - **Q：原项目里的 `tests\` 去哪了？** A：原 `tests\` 主要是本机自测用的音频素材（含真人录音），属于个人素材不入库；部署自检方法见 DEPLOY.md「步骤 5」，不需要额外测试文件。
 - **Q：可以商用吗？** A：请遵守各引擎开源协议以及音色/素材的授权要求；本项目仅供学习交流。

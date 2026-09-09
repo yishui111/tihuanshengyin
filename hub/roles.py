@@ -13,14 +13,32 @@ import time
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 各引擎服务端口（与各自 bat 默认一致）。
-# 引擎端口可单独覆盖（环境变量 A_PORT/B_PORT/C_PORT/D_PORT）——
-# 引擎侧用 API_PORT 改端口时，hub 侧要用对应 A_PORT 等变量指向新端口，
-# 否则 8010 被本机其它程序占用/抢占时会出现"引擎在线但转换 404"的假象。
+# 端口优先级：环境变量 A_PORT/B_PORT/C_PORT/D_PORT >
+# 引擎自报的实际端口文件（engine_port.txt 等，引擎被抢占端口自动顺延时
+# 会重写）> 默认值。避免"8010 被本机其它程序占用时探测在线但转换 404"的假象。
+def _engine_port(env_key, default, port_file):
+    val = os.environ.get(env_key)
+    if val:
+        return int(val)
+    try:
+        with open(port_file) as f:
+            port = int(f.read().strip())
+        if 1 <= port <= 65535:
+            return port
+    except Exception:  # noqa: BLE001
+        pass
+    return default
+
+
 PORTS = {
-    "A": int(os.environ.get("A_PORT", "8010")),
-    "B": int(os.environ.get("B_PORT", "8020")),
-    "C": int(os.environ.get("C_PORT", "8030")),
-    "D": int(os.environ.get("D_PORT", "8040")),
+    "A": _engine_port("A_PORT", 8010,
+                      os.path.join(PROJECT_ROOT, "rvc_service", "engine_port.txt")),
+    "B": _engine_port("B_PORT", 8020,
+                      os.path.join(PROJECT_ROOT, "openvoice_service", "engine_port.txt")),
+    "C": _engine_port("C_PORT", 8030,
+                      os.path.join(PROJECT_ROOT, "sovits_service", "engine_port.txt")),
+    "D": _engine_port("D_PORT", 8040,
+                      os.path.join(PROJECT_ROOT, "gptsovits_service", "engine_port.txt")),
 }
 
 # 引擎显示名

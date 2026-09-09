@@ -189,11 +189,16 @@ def merge_segments(segs, sr, gap_sec=1.5):
     return out
 
 
-def process_file(src, mapping, workdir, separate, out_root, log):
+def process_file(src, mapping, workdir, separate, out_root, log,
+                 stems=None, diarize_info=None):
     """处理单个文件。
 
     mapping: {说话人编号(str): role dict}（来自 roles.load_roles()）
     返回输出文件路径；无人声返回 None。
+    stems: 预先分离好的 (vocals, music) 数组——卡片②两步流程里上传排查时
+    已分离过，转换步直接复用，避免二次分离+两次检测标签不一致。
+    diarize_info: 预先算好的说话人检测结果（diarize.diarize 的返回值），
+    提供时跳过内部检测，保证与排查步给用户看到的标签一致。
 
     换声粒度：
       - 单说话人：整段一次转换（引擎内部自动切片，最自然连贯）
@@ -213,12 +218,20 @@ def process_file(src, mapping, workdir, separate, out_root, log):
 
     music = None
     if separate:
-        log("② 人声分离（去背景音乐）...")
-        vocals, music = separate_vocals(y, sr)
-        y = vocals
+        if stems is not None:
+            log("② 复用排查时已分离的人声/背景音乐轨")
+            vocals, music = stems
+            y = vocals
+        else:
+            log("② 人声分离（去背景音乐）...")
+            vocals, music = separate_vocals(y, sr)
+            y = vocals
 
     log("③ 说话人检测...")
-    d = diarize.diarize(y, sr)
+    if diarize_info is not None:
+        d = diarize_info
+    else:
+        d = diarize.diarize(y, sr)
     if d["n_speakers"] == 0:
         log("  未检测到人声，跳过该文件")
         return None
