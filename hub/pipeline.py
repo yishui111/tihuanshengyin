@@ -216,6 +216,17 @@ def process_file(src, mapping, workdir, separate, out_root, log,
         y = y.mean(axis=1)
     y = np.asarray(y, dtype="float32")
 
+    # 电平治理①：原素材过热（接近满幅/已削波）会把引擎输出推破、混音后
+    # 也没留编码余量——统一先压到峰顶约 -3dB，后续分离/转换/混音都在
+    # 安全电平上进行（音频/视频整体响度略微降低，换取不破音）
+    peak0 = float(np.abs(y).max())
+    if peak0 > 0.92:
+        import math
+        gain = 0.88 / peak0
+        y = (y * gain).astype("float32")
+        log("  原素材电平过热（峰值 %.2f），已整体降 %.1f dB 防破音"
+            % (peak0, -20 * math.log10(gain)))
+
     music = None
     if separate:
         if stems is not None:
@@ -274,6 +285,10 @@ def process_file(src, mapping, workdir, separate, out_root, log,
         if out_sr != sr:
             out_y = librosa.resample(out_y, orig_sr=out_sr, target_sr=sr)
         fit = _fit_to(np.asarray(out_y, dtype="float32"), b - a)
+        # 电平治理②：个别段被引擎推得过响时按段压回，不影响其它段响度
+        seg_peak = float(np.abs(fit).max())
+        if seg_peak > 0.92:
+            fit = (fit * (0.92 / seg_peak)).astype("float32")
         fit = _fade(fit, sr)
         converted[a:b] = fit
         count += 1
@@ -290,9 +305,11 @@ def process_file(src, mapping, workdir, separate, out_root, log,
             a, b = seg["start"], seg["end"]
             if role is not None and b - a >= int(MIN_CONVERT_SEC * sr):
                 final[a:b] = converted[a:b]
+    # 电平治理③：成品峰顶留 ~1dB 编码余量（wav→aac 会轻微过冲，
+    # 满幅成品编码后必破音），超过就整体线性压回
     peak = float(np.abs(final).max())
-    if peak > 0.99:
-        final = final * (0.95 / peak)
+    if peak > 0.89:
+        final = (final * (0.89 / peak)).astype("float32")
 
     tag = "_".join(role["name"] for role in sorted(
         mapping.values(), key=lambda r: r["name"]))

@@ -11,7 +11,7 @@ REM    start.bat stop      -> stop ALL services
 REM    start.bat stop B    -> stop only engine B
 REM    start.bat help      -> show this usage
 REM  Web  : http://127.0.0.1:8000/   (Hub / batch voice swap)
-REM  Ports: Hub=8000  A=8010  B=8020  C=8030  D=8040
+REM  Ports: Hub=8000  A=8011  B=8020  C=8030  D=8040
 REM  If a default port is taken by ANOTHER program, the service
 REM  falls back to the next port (8001, 8002, ...). Chosen ports
 REM  are saved to last_run_ports.txt; stop.bat frees exactly ours.
@@ -49,13 +49,15 @@ for %%S in (%*) do set "WANT=!WANT!%%S"
 
 echo ============================================
 echo   Voice Swap Workbench launcher
-echo   Default ports: Hub=8000  A=8010  B=8020  C=8030  D=8040
+echo   Default ports: Hub=8000  A=8011  B=8020  C=8030  D=8040
 echo   Ports taken by other programs are skipped automatically.
 echo ============================================
 
 REM ---- engines first (their chosen ports are passed to the Hub
 REM      via A_PORT/B_PORT/C_PORT/D_PORT), then the Hub itself ----
-if not "%WANT:A=%"=="%WANT%" call :start A_PORT 8010 "%PY312%" "%ROOT%rvc_service\rvc_character_api.py" rvc-character
+REM A defaults to 8011: port 8010 loopback is often grabbed by other
+REM programs on this machine (probe looks online but /convert 404s)
+if not "%WANT:A=%"=="%WANT%" call :start A_PORT 8011 "%PY312%" "%ROOT%rvc_service\rvc_character_api.py" rvc-character
 if not "%WANT:B=%"=="%WANT%" call :start B_PORT 8020 "%PY310%" "%ROOT%openvoice_service\openvoice_clone_api.py" openvoice-clone
 if not "%WANT:C=%"=="%WANT%" call :start C_PORT 8030 "%PY312%" "%ROOT%sovits_service\sovits_cn_api.py" sovits-cn
 if not "%WANT:D=%"=="%WANT%" call :start D_PORT 8040 "%PY312%" "%ROOT%gptsovits_service\gptsovits_cn_api.py" gptsovits-cn
@@ -98,7 +100,7 @@ if %ROUNDS% gtr 3 (
 )
 set "PORT="
 set "PICKMODE="
-for /f "tokens=1,2" %%A in ('powershell -NoProfile -Command "$want=%DEFPORT%; $marker='%MARKER%'; for($i=0; $i -lt 6; $i++){ $p=$want+$i; $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue; $ours=$false; $foreign=$false; foreach($c in $conns){ $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c.OwningProcess) -ErrorAction SilentlyContinue; if (-not $proc) { Start-Sleep -Milliseconds 300; $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c.OwningProcess) -ErrorAction SilentlyContinue }; if ($proc) { if ($proc.CommandLine -like ('*' + $marker + '*')) { $ours = $true } else { $foreign = $true } } }; if (-not $conns) { Write-Output ('' + $p + ' free'); exit }; if ($ours) { Write-Output ('' + $p + ' ours'); exit } }"') do (
+for /f "tokens=1,2" %%A in ('powershell -NoProfile -Command "$want=%DEFPORT%; $marker='%MARKER%'; $leaf=$marker.Substring($marker.LastIndexOf(92)+1); for($i=0; $i -lt 6; $i++){ $p=$want+$i; $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue; $ours=$false; $foreign=$false; foreach($c in $conns){ $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c.OwningProcess) -ErrorAction SilentlyContinue; if (-not $proc) { Start-Sleep -Milliseconds 300; $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c.OwningProcess) -ErrorAction SilentlyContinue }; if ($proc) { $cl=$proc.CommandLine; if ($cl -like ('*' + $marker + '*') -or ($cl -like '*runtime\py*' -and $cl -like ('*' + $leaf + '*'))) { $ours = $true } else { $foreign = $true } } }; if (-not $conns) { Write-Output ('' + $p + ' free'); exit }; if ($ours) { Write-Output ('' + $p + ' ours'); exit } }"') do (
   set "PORT=%%A"
   set "PICKMODE=%%B"
 )
@@ -132,7 +134,7 @@ echo.
 exit /b 0
 
 :stop_all
-powershell -NoProfile -Command "$root='%ROOT%'; $ports = @(); if (Test-Path ($root + 'last_run_ports.txt')) { $ports += Get-Content ($root + 'last_run_ports.txt') | Where-Object { $_ -match '^[0-9]+$' } | ForEach-Object { [int]$_ } }; $ports += 8000,8010,8020,8030,8040; $ports = $ports | Select-Object -Unique; $markers = '*hub*server.py*','*rvc_character_api.py*','*openvoice_clone_api.py*','*sovits_cn_api.py*','*gptsovits_cn_api.py*'; foreach ($p in $ports) { $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue; if (-not $conns) { continue }; $killed = $false; foreach ($c in $conns) { $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c.OwningProcess) -ErrorAction SilentlyContinue; if (-not $proc) { Start-Sleep -Milliseconds 300; $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c.OwningProcess) -ErrorAction SilentlyContinue }; if ($proc) { $m = $false; foreach ($mk in $markers) { if ($proc.CommandLine -like $mk) { $m = $true } }; if ($m) { Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue; $killed = $true } } }; if ($killed) { Write-Output ('port ' + $p + ' -> stopped') } else { Write-Output ('port ' + $p + ' -> other program, not touched') } }"
+powershell -NoProfile -Command "$root='%ROOT%'; $ports = @(); if (Test-Path ($root + 'last_run_ports.txt')) { $ports += Get-Content ($root + 'last_run_ports.txt') | Where-Object { $_ -match '^[0-9]+$' } | ForEach-Object { [int]$_ } }; $ports += 8000,8010,8011,8020,8030,8040; $ports = $ports | Select-Object -Unique; $markers = '*hub*server.py*','*rvc_character_api.py*','*openvoice_clone_api.py*','*sovits_cn_api.py*','*gptsovits_cn_api.py*'; foreach ($p in $ports) { $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue; if (-not $conns) { continue }; $killed = $false; foreach ($c in $conns) { $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c.OwningProcess) -ErrorAction SilentlyContinue; if (-not $proc) { Start-Sleep -Milliseconds 300; $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c.OwningProcess) -ErrorAction SilentlyContinue }; if ($proc) { $m = $false; foreach ($mk in $markers) { if ($proc.CommandLine -like $mk) { $m = $true } }; if ($m) { Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue; $killed = $true } } }; if ($killed) { Write-Output ('port ' + $p + ' -> stopped') } else { Write-Output ('port ' + $p + ' -> other program, not touched') } }"
 exit /b 0
 
 REM ---- stop one service (by letter): find the listener whose
@@ -145,7 +147,7 @@ if /i "%SVC%"=="A" set "MARKER=rvc_character_api.py"
 if /i "%SVC%"=="B" set "MARKER=openvoice_clone_api.py"
 if /i "%SVC%"=="C" set "MARKER=sovits_cn_api.py"
 if /i "%SVC%"=="D" set "MARKER=gptsovits_cn_api.py"
-powershell -NoProfile -Command "$root='%ROOT%'; $ports = @(8000,8010,8020,8030,8040); if (Test-Path ($root + 'last_run_ports.txt')) { $ports += Get-Content ($root + 'last_run_ports.txt') | Where-Object { $_ -match '^[0-9]+$' } | ForEach-Object { [int]$_ } }; $ports = $ports | Select-Object -Unique; $done=$false; foreach ($p in $ports) { $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue; if (-not $conns) { continue }; foreach ($c in $conns) { $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c.OwningProcess) -ErrorAction SilentlyContinue; if ($proc -and $proc.CommandLine -like ('*' + $root + '*') -and $proc.CommandLine -like ('*' + $root + '%MARKER%' + '*')) { Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue; Write-Output ('%SVC% -> stopped (port ' + $p + ')'); $done=$true; break } }; if ($done) { break } }; if (-not $done) { Write-Output ('%SVC% -> not running') }"
+powershell -NoProfile -Command "$root='%ROOT%'; $ports = @(8000,8010,8011,8020,8030,8040); if (Test-Path ($root + 'last_run_ports.txt')) { $ports += Get-Content ($root + 'last_run_ports.txt') | Where-Object { $_ -match '^[0-9]+$' } | ForEach-Object { [int]$_ } }; $ports = $ports | Select-Object -Unique; $done=$false; foreach ($p in $ports) { $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue; if (-not $conns) { continue }; foreach ($c in $conns) { $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c.OwningProcess) -ErrorAction SilentlyContinue; if ($proc -and $proc.CommandLine -like ('*' + $root + '*') -and $proc.CommandLine -like ('*' + $root + '%MARKER%' + '*')) { Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue; Write-Output ('%SVC% -> stopped (port ' + $p + ')'); $done=$true; break } }; if ($done) { break } }; if (-not $done) { Write-Output ('%SVC% -> not running') }"
 exit /b 0
 
 REM ================= HELP =================
@@ -160,7 +162,7 @@ echo   start.bat help      show this help
 echo.
 echo   Ports auto-fall-back when another program takes the default
 echo   (e.g. Hub 8000 -> 8001). stop.bat only stops OUR services.
-echo   Engines: A=RVC(8010, trained models)  B=OpenVoice(8020, clone)
+echo   Engines: A=RVC(8011, trained models)  B=OpenVoice(8020, clone)
 echo            C=SoVITS(8030, built-in CN chars)  D=GPT-SoVITS(8040, re-say)
 echo.
 exit /b 0

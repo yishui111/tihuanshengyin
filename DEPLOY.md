@@ -21,7 +21,7 @@
 ├─ hub\                            # ★自研：换声工作台（端口 8000）
 ├─ openvoice_service\              # ★自研：功能B API（8020）
 │   └─ checkpoints_v2\             #    ← OpenVoice V2 权重（下载）
-├─ rvc_service\                    # ★自研：功能A API（8010）
+├─ rvc_service\                    # ★自研：功能A API（8011）
 │   └─ pymss_models\vocal\...      #    ← 人声分离模型（下载，工作台分离用）
 ├─ rvc\                            # ← 引擎①：RVC-WebUI 克隆
 │   └─ assets\{hubert_base,rmvpe,weights,indices}
@@ -267,7 +267,7 @@ curl -L -o pipeline-config.yaml      $base/freevoid/speaker-diarization-3.1/reso
 ## 七、步骤 5：启动与自检
 
 ```bat
-start.bat            :: 工作台(8000) + 功能A(8010)
+start.bat            :: 工作台(8000) + 功能A(8011)
 start.bat A B C D    :: 全开
 start.bat stop       :: 全部停止（stop.bat 同）
 ```
@@ -276,7 +276,7 @@ start.bat stop       :: 全部停止（stop.bat 同）
 
 ```powershell
 curl http://127.0.0.1:8000/api/health          # 工作台：{"status":"ok",...}
-curl http://127.0.0.1:8010/health              # A
+curl http://127.0.0.1:8011/health              # A
 curl http://127.0.0.1:8020/health              # B
 curl http://127.0.0.1:8030/health              # C
 curl http://127.0.0.1:8040/health              # D
@@ -294,7 +294,7 @@ curl -X POST -F "audio=@<你的测试音频>.wav" -F "character=klee" http://127
 | 项 | 默认值 | 可覆盖 |
 |---|---|---|
 | 换声工作台 | http://127.0.0.1:8000/ | 环境变量 `HUB_PORT` |
-| 功能A/B/C/D | 8010 / 8020 / 8030 / 8040 | 环境变量 `API_PORT`（作用于各自服务） |
+| 功能A/B/C/D | 8011 / 8020 / 8030 / 8040（A 默认 8011：8010 回环常被本机其它程序占用） | 环境变量 `API_PORT`（作用于各自服务） |
 | Python 解释器 | `runtime\py310\|py312\python.exe` | `PY310_PYTHON` / `PY312_PYTHON` |
 | 引擎目录 | `rvc\`、`sovits_service\so-vits-svc-4.1-Stable\`、`gptsovits_service\GPT-SoVITS\` | `RVC_ROOT` / `SOVITS_SRC` / `GSV_ROOT` |
 | OpenVoice 权重目录 | `openvoice_service\checkpoints_v2` | `OV_CKPT`（另 `OV_DEVICE`=cuda/cpu、`OV_WATERMARK`） |

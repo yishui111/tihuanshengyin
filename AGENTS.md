@@ -7,7 +7,7 @@
 
 Windows 离线语音克隆/换声服务集合（模型本地加载，无需联网）：
 - 工作台（hub，8000）：**一键换音色（训练音色，核心功能）**、多人对话换声（排查说话人逐人分配）、文件夹批量说话人换声、输出浏览（2026-09-06 删除原"单文件换声"卡片④，能力并入①）
-- 功能A RVC 二次元角色换声（8010）
+- 功能A RVC 二次元角色换声（8011，默认改 8011 因 8010 回环常被占用）
 - 功能B OpenVoice 任意人声克隆（8020）
 - 功能C SoVITS 中配角色换声（8030）
 - 功能D GPT-SoVITS ASR+重合成（8040）
@@ -50,6 +50,10 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
    按原时间轴拼回（段边界 45ms 淡入淡出）；视频用 ffmpeg `-c:v copy -c:a aac`
    混流，画面不重编码。D 不用于批量逐段（时长不保）。
    换声粒度：单说话人整段一次转换；多说话人先合并相邻同人段（间隔 ≤1.5s）再转换。
+   **电平治理（防破音，2026-09-09）**：素材峰值>0.92 先整体压到 0.88 再进引擎
+   （RVC 的 rms_mix_rate 会把输出包络对齐到输入响度，过热素材必破）；
+   单段转换结果>0.92 按段压回；成品峰顶>0.89 整体压回（wav→aac 有过冲，
+   满幅成品编码后必破音）。
 5. hub 的 C 角色名换算：模型文件名（`nahida41_G_*.pth`/`randenEi_G_*.pth`）≠
    接口角色名（`nahida`/`raiden`），见 `hub/roles.py` 的 `C_CHAR_OVERRIDES`。
 6. 各服务以脚本方式运行：若用嵌入版 Python 需确保脚本目录在 sys.path
@@ -90,8 +94,9 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
   torch/numpy，必要时 `--no-deps`。torch>=2.6 默认 `weights_only=True` 会拒绝
   pyannote 3.3.2 的老式 checkpoint，diarize.py 已做兼容补丁。
 - 8010 回环被其它程序占用时：引擎若已抢先绑定 0.0.0.0:8010 仍会被更精确的
-  127.0.0.1:8010 抢走回环流量，表现为"探测在线但 /convert 404"；处置见
-  `hub/roles.py` 端口优先级（引擎顺延到 8011 写 engine_port.txt，hub 自动跟随）。
+  127.0.0.1:8010 抢走回环流量，表现为"探测在线但 /convert 404"；处置：引擎 A 默认端口已改为 8011
+  （start.bat），hub 经 `hub/roles.py` 端口优先级（环境变量 > engine_port.txt
+  > 默认值）自动跟随。
 - **RVC 引擎必须禁用 CUDA 图**：`rvc_character_api.py` 启动时设 `RVC_CUDA_GRAPH=0`。RVC 的 CUDA 图按固定输入形状捕获推理图，实际使用音频长短不一，形状变化会复用旧图导致推理直接失败（报错指向 rvc	ools\cuda_graph.py）——2026-09-06 实测定位。
 - 两人重叠说话无法完美分离；功能D 会把句子"重新说一遍"，保留原节奏用功能C。
 - 端口被占用：`set API_PORT=xxxx` / `set HUB_PORT=xxxx` 后重启。
@@ -107,7 +112,7 @@ Windows 离线语音克隆/换声服务集合（模型本地加载，无需联�
 - 默认简体中文；改动后同步更新 README/DEPLOY/部署方案；保持本文件 <150 行。
 ---
 ### 关键点（2026-09-02 上传整理补充）
-- 自研层：hub 工作台 8000 + 4 个引擎封装 API：A=RVC 8010 / B=OpenVoice 8020 / C=SoVITS 8030 / D=GPT-SoVITS 8040（端口/引擎目录/解释器全部环境变量可覆盖）
+- 自研层：hub 工作台 8000 + 4 个引擎封装 API：A=RVC 8011 / B=OpenVoice 8020 / C=SoVITS 8030 / D=GPT-SoVITS 8040（端口/引擎目录/解释器全部环境变量可覆盖）
 - 引擎源码与权重一律不入库；DEPLOY.md 记录固定 commit：RVC 81eed5e8f、GPT-SoVITS d523079f、OpenVoice 74a1d147、so-vits 4.1-Stable
 - 关键坑：功能 C 需 onnxruntime-gpu==1.17.1 + nvidia-cudnn-cu11（已写进 requirements）；B/工作台可 CPU，C/D 需 NVIDIA
 - requirements 除 onnxruntime 外多为宽松版本，torch 以各引擎 README 为准
