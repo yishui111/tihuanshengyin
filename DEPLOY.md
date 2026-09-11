@@ -219,7 +219,7 @@ models\klee_G.pth / klee.json / klee_kmeans.pt   （kmeans 索引角色）
 | 模型 | 目标 | 说明 |
 |---|---|---|
 | pyannote speaker-diarization-3.1（说话人检测主后端） | `runtime\cache\pyannote\`（结构见下方「pyannote 模型离线放置」） | 官方 HF 仓库是 gated 的；用下方转载源或自有 token 下载，文件校验一致即可 |
-| ECAPA 声纹（说话人检测回退后端） | `runtime\cache\hf_speaker_model\` + `runtime\cache\huggingface\` | 首次联网运行 `python hub\server.py` 会自动从 speechbrain（`spkrec-ecapa-voxceleb`）下载并缓存；之后离线。也可提前在能联网的机器上把缓存目录整个拷过来 |
+| ECAPA 声纹（说话人检测回退后端） | `runtime\cache\hf_speaker_model\` + `runtime\cache\huggingface\` | 联网机器运行 `runtime\py312\python.exe hub\download_ecapa.py` 一次性下载（或首次联网运行 `python hub\server.py` 自动从 speechbrain（`spkrec-ecapa-voxceleb`）下载并缓存）；之后全离线。也可提前在能联网的机器上把缓存目录整个拷过来。若该模型缺失，hub「说话人排查」会报错并提示运行此脚本 |
 | 人声分离 `bs_roformer_voc_hyperacev2` | `rvc_service\pymss_models\vocal\vocal_extraction\{bs_roformer_voc_hyperacev2.ckpt, bs_roformer_voc_hyperacev2.yaml}` | 来自 pymss（https://github.com/pymss-project/pymss），按官方下载到该目录；工作台批量换声勾选「人声分离」时才需要 |
 
 #### pyannote 模型离线放置（hub/diarize.py 主后端）
