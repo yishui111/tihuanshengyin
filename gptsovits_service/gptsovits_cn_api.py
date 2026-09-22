@@ -40,6 +40,20 @@ os.environ.setdefault("NUMBA_CACHE_DIR", os.path.join(SCRIPT_DIR, "tmp", "numba"
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
+# onnxruntime-gpu 1.17 需要 CUDA 11.8 + cuDNN 8 的 dll（nvidia pip 包 + torch 自带）。
+# 环境里设了 CUDA_PATH 时 onnxruntime 会尝试 CUDA EP，缺这些 dll 会直接抛
+# EP Error（切换角色权重时会拉起 onnxruntime）。与 sovits_cn_api.py 同款处理。
+for _dll_dir in [
+    os.path.join(SCRIPT_DIR, "..", "runtime", "py312", "Lib", "site-packages", "nvidia", "cudnn", "bin"),
+    os.path.join(SCRIPT_DIR, "..", "runtime", "py312", "Lib", "site-packages", "nvidia", "cublas", "bin"),
+    os.path.join(SCRIPT_DIR, "..", "runtime", "py312", "Lib", "site-packages", "nvidia", "cuda_runtime", "bin"),
+    os.path.join(SCRIPT_DIR, "..", "runtime", "py312", "Lib", "site-packages", "nvidia", "cufft", "bin"),
+    os.path.join(SCRIPT_DIR, "..", "runtime", "py312", "Lib", "site-packages", "nvidia", "cuda_nvrtc", "bin"),
+    os.path.join(SCRIPT_DIR, "..", "runtime", "py312", "Lib", "site-packages", "torch", "lib"),
+]:
+    if os.path.isdir(_dll_dir):
+        os.environ["PATH"] = _dll_dir + os.pathsep + os.environ.get("PATH", "")
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("gptsovits_cn")
 
@@ -147,6 +161,32 @@ import api as gpt_api  # noqa: E402
 _gsv_lock = threading.Lock()
 _loaded_char = "ayaka"
 _asr_model = None
+
+
+def _patch_sentencepiece_ascii_path():
+    """sentencepiece 的 C++ 层在 Windows 上打不开含非 ASCII 字符的路径
+    （本仓库目录名含中文，NOT_FOUND 假象），失败时复制到 %TEMP% 纯
+    ASCII 路径再加载一次。"""
+    import sentencepiece as _spm
+
+    _orig_load = _spm.SentencePieceProcessor.Load
+
+    def _load_ascii_safe(self, file_path, *args, **kwargs):
+        try:
+            return _orig_load(self, file_path, *args, **kwargs)
+        except RuntimeError:
+            path = str(file_path or "")
+            if path.isascii() or not os.path.isfile(path):
+                raise
+            ascii_path = os.path.join(tempfile.gettempdir(), "funasr_bpe.model")
+            shutil.copyfile(path, ascii_path)
+            return _orig_load(self, ascii_path, *args, **kwargs)
+
+    _spm.SentencePieceProcessor.Load = _load_ascii_safe
+    _spm.SentencePieceProcessor.load = _load_ascii_safe  # load 是 Load 的类级别别名，需一并替换
+
+
+_patch_sentencepiece_ascii_path()
 
 
 def get_asr():

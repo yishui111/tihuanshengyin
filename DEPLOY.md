@@ -207,6 +207,12 @@ models\klee_G.pth / klee.json / klee_kmeans.pt   （kmeans 索引角色）
 > `gptsovits_cn_api.py` 的 `CHARACTERS` 中填 `ref_text`）；角色目录出现在下拉列表靠
 > `roles.py` 扫描 `models\` 下含 .ckpt/.pth 的子目录。
 
+> **2026-09-23 实测修过的两个坑**（已在 `gptsovits_cn_api.py` 内置处理，勿删）：
+> ① 项目目录名含中文时，funasr 的 sentencepiece 打不开 ASR 分词器文件（报 NOT_FOUND
+> 假象），已加补丁失败后复制到 `%TEMP%` 纯 ASCII 路径重载；② 环境变量有 `CUDA_PATH`
+> 时 onnxruntime 切角色权重会因缺 cuDNN dll 抛 EP Error，已把 `nvidia\*\bin`、
+> `torch\lib` 注入 PATH（与 `sovits_cn_api.py` 同款）。
+
 ### 6.4 功能B（OpenVoice）— `openvoice_service\`
 
 | 文件 | 目标路径 | 来源 |
